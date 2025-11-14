@@ -1,0 +1,39 @@
+name: chat_app
+description: "Aplicativo de chat em tempo real com Supabase e Flutter"
+publish_to: 'none' 
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.9.2 <4.0.0'
+
+# Dependências principais do App
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # 🔹 Supabase (banco, auth e realtime)
+  supabase_flutter: ^2.5.4
+
+  # 🔹 HTTP (para chamadas à Edge Function)
+  http: ^1.2.0
+
+  # 🔹 Image Picker (para escolher imagens do dispositivo)
+  image_picker: ^1.0.7
+
+  # 🔹 Ícones iOS (opcional)
+  cupertino_icons: ^1.0.8
+
+# Dependências apenas para Desenvolvimento e Testes
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^5.0.0
+
+# Configurações do Flutter
+flutter:
+  uses-material-design: true
+
+  # Se tiver imagens locais, descomente e adicione aqui:
+  # assets:
+  #   - assets/images/
