@@ -1,6 +1,7 @@
 // lib/pages/conversas_page.dart
 import 'package:flutter/material.dart';
-import 'package:chat_app/main.dart';
+import 'package:chat_app/services/supabase_service.dart';
+import 'package:chat_app/services/presence_service.dart';
 
 class ConversasPage extends StatefulWidget {
   const ConversasPage({super.key});
@@ -10,21 +11,33 @@ class ConversasPage extends StatefulWidget {
 }
 
 class _ConversasPageState extends State<ConversasPage> {
-  late Future<List<Map<String, dynamic>>> _futureConversas;
+  late final Stream<List<Map<String, dynamic>>> _streamConversas;
+  late final Stream<List<Map<String, dynamic>>> _presenceStream;
+  Map<String, Map<String, dynamic>> _presenceCache = {};
 
   @override
   void initState() {
     super.initState();
-    _futureConversas = _getConversas();
-  }
+    final userId = supabase.auth.currentUser!.id;
 
-  Future<List<Map<String, dynamic>>> _getConversas() {
-    return supabase
+    _streamConversas = supabase
         .from('v_user_conversations')
-        .select()
-        .eq('participant_id', supabase.auth.currentUser!.id)
-        //.order('last_message_at', ascending: false) // opcional
-        ;
+        .stream(primaryKey: ['conversation_id'])
+        .eq('participant_id', userId)
+        .order('last_message_at', ascending: false);
+
+    _presenceStream = PresenceService.presenceStream();
+    _presenceStream.listen((rows) {
+      // Atualiza cache de presença
+      final map = <String, Map<String, dynamic>>{};
+      for (var r in rows) {
+        final id = r['user_id']?.toString();
+        if (id != null) map[id] = Map<String, dynamic>.from(r);
+      }
+      setState(() {
+        _presenceCache = map;
+      });
+    });
   }
 
   @override
@@ -42,6 +55,8 @@ class _ConversasPageState extends State<ConversasPage> {
             icon: const Icon(Icons.logout),
             tooltip: 'Sair',
             onPressed: () async {
+              final uid = supabase.auth.currentUser?.id;
+              if (uid != null) await PresenceService.setOffline(uid);
               await supabase.auth.signOut();
               if (context.mounted) {
                 Navigator.of(context).pushReplacementNamed('/login');
@@ -50,86 +65,55 @@ class _ConversasPageState extends State<ConversasPage> {
           ),
         ],
       ),
-
-      body: FutureBuilder<List<Map<String, dynamic>>>(
-        future: _futureConversas,
+      body: StreamBuilder<List<Map<String, dynamic>>>(
+        stream: _streamConversas,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
+          if (!snapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
 
-          if (snapshot.hasError) {
-            return Center(child: Text('Erro: ${snapshot.error}'));
-          }
-
-          if (!snapshot.hasData || snapshot.data!.isEmpty) {
-            return const Center(
-              child: Text('Nenhuma conversa encontrada. Inicie uma na busca.'),
-            );
-          }
-
           final conversas = snapshot.data!;
+          if (conversas.isEmpty) {
+            return const Center(child: Text("Nenhuma conversa ainda."));
+          }
 
           return ListView.builder(
             itemCount: conversas.length,
             itemBuilder: (context, index) {
               final c = conversas[index];
-              final conversaId = c['conversation_id'];
-
-              // Nome do outro participante (OU nome do grupo)
-              final nomeConversa = c['display_name'] ?? "Conversa";
-
-              // Avatar final da view
+              final conversaId = c['conversation_id'] as String?;
+              final name = (c['display_name'] ?? "Conversa") as String;
               final avatar = c['display_avatar'] as String?;
-
-              // Última mensagem
               final lastMsg = c['last_message'] ?? "";
+              // detect typing from participants: v_user_conversations could include typing info (if view built)
+              final typingUsers = c['typing_users'] ?? '';
+              final subtitle = (typingUsers != null && (typingUsers as String).isNotEmpty)
+                  ? "digitando..."
+                  : lastMsg;
 
               return ListTile(
                 leading: CircleAvatar(
-                  backgroundImage:
-                      avatar != null ? NetworkImage(avatar) : null,
-                  child: avatar == null
-                      ? Text(
-                          nomeConversa.isNotEmpty
-                              ? nomeConversa[0].toUpperCase()
-                              : "?",
-                        )
-                      : null,
+                  backgroundImage: avatar != null ? NetworkImage(avatar) : null,
+                  child: avatar == null ? Text(name.isNotEmpty ? name[0].toUpperCase() : "?") : null,
                 ),
-                title: Text(
-                  nomeConversa,
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-                subtitle: Text(
-                  lastMsg,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                onTap: () async {
-                  await Navigator.of(context)
-                      .pushNamed('/chat', arguments: conversaId);
-
-                  setState(() {
-                    _futureConversas = _getConversas();
-                  });
+                title: Text(name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                subtitle: Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+                onTap: () {
+                  if (conversaId != null) {
+                    Navigator.of(context).pushNamed('/chat', arguments: conversaId);
+                  }
                 },
               );
             },
           );
         },
       ),
-
       floatingActionButton: FloatingActionButton(
+        tooltip: 'Buscar usuários',
+        child: const Icon(Icons.add_comment),
         onPressed: () async {
           await Navigator.of(context).pushNamed('/search');
-
-          setState(() {
-            _futureConversas = _getConversas();
-          });
         },
-        child: const Icon(Icons.add_comment),
-        tooltip: 'Buscar usuários',
       ),
     );
   }
