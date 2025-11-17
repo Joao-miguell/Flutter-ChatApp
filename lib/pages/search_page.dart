@@ -1,6 +1,7 @@
 // lib/pages/search_page.dart
 import 'package:flutter/material.dart';
 import 'package:chat_app/services/supabase_service.dart';
+import 'dialogs/create_group_dialog.dart'; // <--- importe o diálogo que você criou
 
 class SearchPage extends StatefulWidget {
   const SearchPage({super.key});
@@ -149,7 +150,6 @@ class _SearchPageState extends State<SearchPage> {
       await supabase.from('participants').insert(inserts);
 
       if (mounted) {
-        Navigator.of(context).pop(); // fecha modal/criar grupo
         Navigator.of(context).popAndPushNamed('/chat', arguments: groupId);
       }
     } catch (e) {
@@ -229,9 +229,10 @@ class _SearchPageState extends State<SearchPage> {
         child: const Icon(Icons.group_add),
         tooltip: 'Criar grupo',
         onPressed: () async {
+          // chama o diálogo novo que você criou
           final result = await showDialog<Map<String, dynamic>>(
             context: context,
-            builder: (_) => _CreateGroupDialog(),
+            builder: (_) => const CreateGroupDialog(),
           );
           if (result != null) {
             final name = result['name'] as String;
@@ -240,95 +241,6 @@ class _SearchPageState extends State<SearchPage> {
           }
         },
       ),
-    );
-  }
-}
-
-class _CreateGroupDialog extends StatefulWidget {
-  @override
-  State<_CreateGroupDialog> createState() => _CreateGroupDialogState();
-}
-
-class _CreateGroupDialogState extends State<_CreateGroupDialog> {
-  String _name = '';
-  List<Map<String, dynamic>> _found = [];
-  List<String> _selected = [];
-  final _ctrl = TextEditingController();
-  bool _loading = false;
-
-  Future<void> _search(String q) async {
-    if (q.isEmpty) {
-      setState(() => _found = []);
-      return;
-    }
-    setState(() => _loading = true);
-    final me = supabase.auth.currentUser!.id;
-    final users = await supabase.from('profiles').select().ilike('name', '%$q%').neq('id', me);
-    setState(() {
-      _found = (users ?? []).cast<Map<String, dynamic>>();
-      _loading = false;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Criar Grupo'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextField(
-            decoration: const InputDecoration(labelText: 'Nome do grupo'),
-            onChanged: (v) => _name = v,
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _ctrl,
-            decoration: const InputDecoration(labelText: 'Adicionar participantes (buscar)'),
-            onChanged: _search,
-          ),
-          const SizedBox(height: 8),
-          if (_loading) const CircularProgressIndicator(),
-          if (!_loading)
-            SizedBox(
-              height: 120,
-              child: ListView.builder(
-                itemCount: _found.length,
-                itemBuilder: (context, idx) {
-                  final u = _found[idx];
-                  final id = u['id'] as String;
-                  final name = u['name'] as String? ?? '...';
-                  final selected = _selected.contains(id);
-                  return ListTile(
-                    title: Text(name),
-                    trailing: IconButton(
-                      icon: Icon(selected ? Icons.check_box : Icons.check_box_outline_blank),
-                      onPressed: () {
-                        setState(() {
-                          if (selected) _selected.remove(id);
-                          else _selected.add(id);
-                        });
-                      },
-                    ),
-                  );
-                },
-              ),
-            ),
-        ],
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancelar')),
-        ElevatedButton(
-          onPressed: () {
-            if (_name.trim().isEmpty || _selected.isEmpty) {
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nome e pelo menos 1 participante')));
-              return;
-            }
-            Navigator.of(context).pop({'name': _name.trim(), 'participants': _selected});
-          },
-          child: const Text('Criar'),
-        ),
-      ],
     );
   }
 }
