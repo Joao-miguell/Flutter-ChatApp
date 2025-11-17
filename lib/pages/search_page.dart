@@ -26,18 +26,20 @@ class _SearchPageState extends State<SearchPage> {
     try {
       final meuUserId = supabase.auth.currentUser!.id;
 
+      // Busca por users
       final users = await supabase
           .from('profiles')
           .select()
           .ilike('name', '%$query%')
           .neq('id', meuUserId);
 
+      // Busca por grupos públicos
       final groups = await supabase
           .from('conversations')
           .select('id, name, avatar_url')
           .ilike('name', '%$query%')
           .eq('is_group', true)
-          .eq('is_public', true);
+          .eq('is_public', true); // <-- Código já busca grupos
 
       final results = <Map<String, dynamic>>[];
 
@@ -122,13 +124,13 @@ class _SearchPageState extends State<SearchPage> {
         final meuUserId = supabase.auth.currentUser!.id;
         final conversaData = await supabase.from('conversations').insert({
           'is_group': false
-        }).select().single(); // <--- Funciona com RLS (true)
+        }).select().single(); 
         final conversaId = conversaData['id'] as String;
 
         await supabase.from('participants').insert([
           {'conversation_id': conversaId, 'user_id': meuUserId},
           {'conversation_id': conversaId, 'user_id': outroUserId},
-        ]); // <--- Funciona com RLS (true)
+        ]); 
 
         if (mounted) {
           Navigator.of(context).popAndPushNamed('/chat', arguments: conversaId);
@@ -144,7 +146,7 @@ class _SearchPageState extends State<SearchPage> {
     }
   }
 
-  // 🟢 CÓDIGO REVERTIDO: Lógica de criação manual (sem RPC)
+  // Lógica de criação manual (funciona com as políticas permissivas)
   Future<void> _criarGrupoSimples(String name, List<String> participantIds) async {
     try {
       final meuUserId = supabase.auth.currentUser!.id;
@@ -152,7 +154,7 @@ class _SearchPageState extends State<SearchPage> {
           .from('conversations')
           .insert({'is_group': true, 'name': name, 'is_public': false})
           .select()
-          .single(); // <--- Funciona com RLS (true)
+          .single(); 
       final groupId = data['id'] as String;
 
       final inserts = [
@@ -161,10 +163,10 @@ class _SearchPageState extends State<SearchPage> {
       for (var pid in participantIds) {
         inserts.add({'conversation_id': groupId, 'user_id': pid});
       }
-      await supabase.from('participants').insert(inserts); // <--- Funciona com RLS (true)
+      await supabase.from('participants').insert(inserts); 
 
       if (mounted) {
-        // Correção de navegação (sem pop() extra) já estava nesta versão
+        // Correção de navegação (sem pop() extra)
         Navigator.of(context).popAndPushNamed('/chat', arguments: groupId);
       }
     } catch (e) {
@@ -189,7 +191,7 @@ class _SearchPageState extends State<SearchPage> {
     return ListTile(
       leading: CircleAvatar(
         backgroundImage: avatar != null ? NetworkImage(avatar) : null,
-        child: avatar == null ? Text(name[0].toUpperCase()) : null,
+        child: avatar == null ? Text(name.isNotEmpty ? name[0].toUpperCase() : "?") : null,
       ),
       title: Text(name),
       subtitle: Text(type == 'user' ? (isOnline ? 'Online' : 'Offline') : 'Grupo público'),

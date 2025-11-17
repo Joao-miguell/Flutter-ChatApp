@@ -1,12 +1,14 @@
 // lib/services/profile_cache.dart
-import 'package:chat_app/main.dart';
+import 'package:chat_app/main.dart'; // Importa o 'supabase' global de main.dart
 
 class ProfileCache {
-  static final Map<String, Map<String, dynamic>> _cache = {};
+  // 🟢 CORREÇÃO: Renomeado de '_cache' (privado) para 'cachedProfiles' (público)
+  static final Map<String, Map<String, dynamic>> cachedProfiles = {};
 
   /// Retorna { 'name': ..., 'avatar_url': ... } ou null.
   static Future<Map<String, dynamic>?> getProfile(String id) async {
-    if (_cache.containsKey(id)) return _cache[id];
+    // 🟢 CORREÇÃO: Usa 'cachedProfiles'
+    if (cachedProfiles.containsKey(id)) return cachedProfiles[id];
 
     final res = await supabase
         .from('profiles')
@@ -14,13 +16,16 @@ class ProfileCache {
         .eq('id', id)
         .maybeSingle();
 
-    if (res != null) _cache[id] = Map<String, dynamic>.from(res);
+    // 🟢 CORREÇÃO: Usa 'cachedProfiles'
+    if (res != null) cachedProfiles[id] = Map<String, dynamic>.from(res);
     return res == null ? null : Map<String, dynamic>.from(res);
   }
 
   static void setProfile(String id, Map<String, dynamic> profile) {
-    _cache[id] = profile;
+    // 🟢 CORREÇÃO: Usa 'cachedProfiles'
+    cachedProfiles[id] = profile;
   }
 
-  static void clear() => _cache.clear();
+  // 🟢 CORREÇÃO: Usa 'cachedProfiles'
+  static void clear() => cachedProfiles.clear();
 }

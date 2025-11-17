@@ -26,6 +26,12 @@ class _ChatPageState extends State<ChatPage> {
   String? meuUserId;
   Map<String, List<Map<String, dynamic>>> _reactionsCache = {};
 
+  // 🟢 INÍCIO DAS ADIÇÕES (Online/Digitando) 🟢
+  StreamSubscription? _presenceSubscription;
+  final Map<String, String> _typingUsers = {}; // <UserID, UserName>
+  // 🟢 FIM DAS ADIÇÕES 🟢
+
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -42,6 +48,10 @@ class _ChatPageState extends State<ChatPage> {
         .eq('conversation_id', _conversaId!)
         .order('created_at', ascending: true);
 
+    // 🟢 INÍCIO DAS ADIÇÕES (Ouvinte de Presença) 🟢
+    _listenToPresence();
+    // 🟢 FIM DAS ADIÇÕES 🟢
+
     // Ao entrar no chat, marca online e typing null
     if (meuUserId != null) {
       PresenceService.setOnline(meuUserId!);
@@ -49,12 +59,72 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
+  // 🟢 INÍCIO DAS ADIÇÕES (Função para ouvir Presença) 🟢
+  void _listenToPresence() {
+    // Busca os perfis de todos os participantes desta conversa
+    // para que saibamos os nomes de quem está digitando.
+    _cacheParticipantsProfiles();
+    
+    _presenceSubscription = PresenceService.presenceStream().listen((states) {
+      if (!mounted) return;
+      
+      final newTypingUsers = <String, String>{};
+      for (final state in states) {
+        final userId = state['user_id'] as String?;
+        final typingAt = state['typing_at'] as String?;
+        
+        // 🟢 CORREÇÃO: Usa o cache público 'cachedProfiles'
+        final userName = ProfileCache.cachedProfiles[userId]?['name'] ?? 'Alguém';
+
+        // Verifica se o usuário está digitando *nesta* conversa
+        if (userId != null && 
+            userId != meuUserId && 
+            typingAt == _conversaId) {
+          newTypingUsers[userId] = userName;
+        }
+      }
+
+      // Compara os mapas para evitar rebuilds desnecessários
+      if (newTypingUsers.keys.length != _typingUsers.keys.length ||
+          !newTypingUsers.keys.every((k) => _typingUsers.containsKey(k))) {
+        if (mounted) {
+          setState(() {
+            _typingUsers.clear();
+            _typingUsers.addAll(newTypingUsers);
+          });
+        }
+      }
+    });
+  }
+
+  Future<void> _cacheParticipantsProfiles() async {
+    if (_conversaId == null) return;
+    try {
+      final participants = await supabase
+          .from('participants')
+          .select('user_id')
+          .eq('conversation_id', _conversaId!);
+      
+      for (var p in participants) {
+        final userId = p['user_id'] as String?;
+        if (userId != null) {
+          // A função getProfile já usa o cache
+          await ProfileCache.getProfile(userId);
+        }
+      }
+    } catch (_) {
+      // falha silenciosa, os nomes apenas aparecerão como "Alguém"
+    }
+  }
+  // 🟢 FIM DAS ADIÇÕES 🟢
+
+
   @override
   void dispose() {
     _messageController.dispose();
+    _presenceSubscription?.cancel(); // 🟢 ADICIONADO 🟢
     if (meuUserId != null) {
       PresenceService.setTyping(meuUserId!, null);
-      // não setamos offline aqui porque usuário pode navegar entre telas
     }
     super.dispose();
   }
@@ -134,7 +204,7 @@ class _ChatPageState extends State<ChatPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
   }
 
-  // Reações: long press para abrir a seleção rápida de emojis (estilo WhatsApp)
+  // Reações
   Future<void> _onMessageLongPress(Map<String, dynamic> message) async {
     final selected = await showModalBottomSheet<String>(
       context: context,
@@ -153,7 +223,6 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Widget _buildReactionsRow(String messageId) {
-    // Mostra reações agregadas se tiver em cache (o ideal é buscar via view)
     final list = _reactionsCache[messageId] ?? [];
     if (list.isEmpty) return const SizedBox.shrink();
 
@@ -179,6 +248,7 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _refreshReactions(List<Map<String, dynamic>> messages) async {
+    if (!mounted) return;
     // atualiza cache de reações para as mensagens visíveis
     for (var m in messages) {
       final mid = m['id'] as String;
@@ -188,7 +258,9 @@ class _ChatPageState extends State<ChatPage> {
       if (rows != null) {
         for (var r in rows) {
           final e = r['emoji'] as String? ?? '';
-          agg[e] = (agg[e] ?? 0) + 1;
+          if (e.isNotEmpty) {
+             agg[e] = (agg[e] ?? 0) + 1;
+          }
         }
       }
       final list = agg.entries.map((e) => {'emoji': e.key, 'count': e.value}).toList();
@@ -213,7 +285,47 @@ class _ChatPageState extends State<ChatPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_conversaId != null ? 'Chat (${_conversaId!.substring(0, 6)})' : 'Chat'),
+        // 🟢 INÍCIO DA MODIFICAÇÃO (Status Online) 🟢
+        title: StreamBuilder(
+          stream: PresenceService.presenceStream(),
+          builder: (context, snapshot) {
+            String title = _conversaId != null ? 'Chat (${_conversaId!.substring(0, 6)})' : 'Chat';
+            String subtitle = ''; // Status padrão
+            
+            if (snapshot.hasData) {
+              final states = snapshot.data!;
+              
+              final isSomeoneOnline = states.any((state) {
+                final userId = state['user_id'] as String?;
+                final isOnline = (state['is_online'] ?? false) as bool;
+                
+                // (Implementação futura: filtrar apenas por participantes
+                // desta conversa específica)
+                return userId != meuUserId && isOnline; 
+              });
+
+              if (isSomeoneOnline) {
+                subtitle = 'Online';
+              } else if (states.isNotEmpty) {
+                subtitle = 'Offline';
+              }
+            }
+            
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(title),
+                if (subtitle.isNotEmpty)
+                  Text(
+                    subtitle,
+                    style: const TextStyle(fontSize: 12, color: Colors.white70),
+                  ),
+              ],
+            );
+          },
+        ),
+        // 🟢 FIM DA MODIFICAÇÃO 🟢
         actions: [
           IconButton(icon: const Icon(Icons.image), tooltip: 'Enviar imagem', onPressed: _enviarImagem),
         ],
@@ -331,6 +443,32 @@ class _ChatPageState extends State<ChatPage> {
               },
             ),
           ),
+          
+          // 🟢 INÍCIO DAS ADIÇÕES (Indicador "Digitando") 🟢
+          if (_typingUsers.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+              child: Row(
+                children: [
+                  const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    // Pega o nome do primeiro usuário que está digitando
+                    '${_typingUsers.values.first}${_typingUsers.length > 1 ? ' e outros' : ''} está${_typingUsers.length > 1 ? 'ão' : ''} digitando...',
+                    style: const TextStyle(
+                      fontStyle: FontStyle.italic,
+                      color: Colors.white70,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          // 🟢 FIM DAS ADIÇÕES 🟢
+
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.all(8.0),
