@@ -26,9 +26,11 @@ class _ChatPageState extends State<ChatPage> {
   String? meuUserId;
   Map<String, List<Map<String, dynamic>>> _reactionsCache = {};
 
-  // 🟢 INÍCIO DAS ADIÇÕES (Online/Digitando) 🟢
+  // 🟢 INÍCIO DAS ADIÇÕES (Online/Digitando/Grupo) 🟢
   StreamSubscription? _presenceSubscription;
   final Map<String, String> _typingUsers = {}; // <UserID, UserName>
+  bool _isGroup = false; // Por padrão, assume que não é grupo
+  bool _isLoadingInfo = true; // Para saber quando a info do chat carregou
   // 🟢 FIM DAS ADIÇÕES 🟢
 
 
@@ -48,9 +50,12 @@ class _ChatPageState extends State<ChatPage> {
         .eq('conversation_id', _conversaId!)
         .order('created_at', ascending: true);
 
-    // 🟢 INÍCIO DAS ADIÇÕES (Ouvinte de Presença) 🟢
+    // 🟢 INÍCIO DAS MUDANÇAS 🟢
+    // 1. Carrega o tipo da conversa (grupo ou não)
+    _loadConversationType();
+    // 2. Ouve a presença
     _listenToPresence();
-    // 🟢 FIM DAS ADIÇÕES 🟢
+    // 🟢 FIM DAS MUDANÇAS 🟢
 
     // Ao entrar no chat, marca online e typing null
     if (meuUserId != null) {
@@ -59,10 +64,29 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  // 🟢 INÍCIO DAS ADIÇÕES (Função para ouvir Presença) 🟢
+  // 🟢 INÍCIO DAS ADIÇÕES 🟢
+  Future<void> _loadConversationType() async {
+    if (_conversaId == null) return;
+    try {
+      final data = await supabase
+          .from('conversations')
+          .select('is_group')
+          .eq('id', _conversaId!)
+          .single();
+      
+      if (mounted) {
+        setState(() {
+          _isGroup = data['is_group'] ?? false;
+          _isLoadingInfo = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _isLoadingInfo = false);
+      // Se falhar, assume que não é grupo e continua
+    }
+  }
+
   void _listenToPresence() {
-    // Busca os perfis de todos os participantes desta conversa
-    // para que saibamos os nomes de quem está digitando.
     _cacheParticipantsProfiles();
     
     _presenceSubscription = PresenceService.presenceStream().listen((states) {
@@ -71,9 +95,8 @@ class _ChatPageState extends State<ChatPage> {
       final newTypingUsers = <String, String>{};
       for (final state in states) {
         final userId = state['user_id'] as String?;
-        final typingAt = state['typing_at'] as String?;
-        
-        // 🟢 CORREÇÃO: Usa o cache público 'cachedProfiles'
+        // 🟢 CORREÇÃO: Coluna 'typing_conversation'
+        final typingAt = state['typing_conversation'] as String?;
         final userName = ProfileCache.cachedProfiles[userId]?['name'] ?? 'Alguém';
 
         // Verifica se o usuário está digitando *nesta* conversa
@@ -108,12 +131,11 @@ class _ChatPageState extends State<ChatPage> {
       for (var p in participants) {
         final userId = p['user_id'] as String?;
         if (userId != null) {
-          // A função getProfile já usa o cache
           await ProfileCache.getProfile(userId);
         }
       }
     } catch (_) {
-      // falha silenciosa, os nomes apenas aparecerão como "Alguém"
+      // falha silenciosa
     }
   }
   // 🟢 FIM DAS ADIÇÕES 🟢
@@ -279,52 +301,52 @@ class _ChatPageState extends State<ChatPage> {
   Widget build(BuildContext context) {
     final meuUserIdLocal = supabase.auth.currentUser?.id;
 
-    if (_messagesStream == null) {
+    if (_messagesStream == null || _isLoadingInfo) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     return Scaffold(
       appBar: AppBar(
-        // 🟢 INÍCIO DA MODIFICAÇÃO (Status Online) 🟢
-        title: StreamBuilder(
-          stream: PresenceService.presenceStream(),
-          builder: (context, snapshot) {
-            String title = _conversaId != null ? 'Chat (${_conversaId!.substring(0, 6)})' : 'Chat';
-            String subtitle = ''; // Status padrão
-            
-            if (snapshot.hasData) {
-              final states = snapshot.data!;
-              
-              final isSomeoneOnline = states.any((state) {
-                final userId = state['user_id'] as String?;
-                final isOnline = (state['is_online'] ?? false) as bool;
-                
-                // (Implementação futura: filtrar apenas por participantes
-                // desta conversa específica)
-                return userId != meuUserId && isOnline; 
-              });
+        // 🟢 INÍCIO DA MODIFICAÇÃO (Esconder Status de Grupo) 🟢
+        title: _isGroup 
+            // Se for grupo, mostra o título simples
+            ? Text(_conversaId != null ? 'Chat (${_conversaId!.substring(0, 6)})' : 'Chat')
+            // Se NÃO for grupo, mostra o status online
+            : StreamBuilder(
+                stream: PresenceService.presenceStream(),
+                builder: (context, snapshot) {
+                  String title = _conversaId != null ? 'Chat (${_conversaId!.substring(0, 6)})' : 'Chat';
+                  String subtitle = ''; // Status padrão
+                  
+                  if (snapshot.hasData) {
+                    final states = snapshot.data!;
+                    final isSomeoneOnline = states.any((state) {
+                      final userId = state['user_id'] as String?;
+                      final isOnline = (state['is_online'] ?? false) as bool;
+                      return userId != meuUserId && isOnline; 
+                    });
 
-              if (isSomeoneOnline) {
-                subtitle = 'Online';
-              } else if (states.isNotEmpty) {
-                subtitle = 'Offline';
-              }
-            }
-            
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(title),
-                if (subtitle.isNotEmpty)
-                  Text(
-                    subtitle,
-                    style: const TextStyle(fontSize: 12, color: Colors.white70),
-                  ),
-              ],
-            );
-          },
-        ),
+                    if (isSomeoneOnline) {
+                      subtitle = 'Online';
+                    } else if (states.isNotEmpty) {
+                      subtitle = 'Offline';
+                    }
+                  }
+                  
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(title),
+                      if (subtitle.isNotEmpty)
+                        Text(
+                          subtitle,
+                          style: const TextStyle(fontSize: 12, color: Colors.white70),
+                        ),
+                    ],
+                  );
+                },
+              ),
         // 🟢 FIM DA MODIFICAÇÃO 🟢
         actions: [
           IconButton(icon: const Icon(Icons.image), tooltip: 'Enviar imagem', onPressed: _enviarImagem),
@@ -347,7 +369,6 @@ class _ChatPageState extends State<ChatPage> {
                 }
 
                 final messages = snapshot.data!;
-                // atualiza reações simples
                 _refreshReactions(messages);
 
                 return ListView.builder(
@@ -444,8 +465,8 @@ class _ChatPageState extends State<ChatPage> {
             ),
           ),
           
-          // 🟢 INÍCIO DAS ADIÇÕES (Indicador "Digitando") 🟢
-          if (_typingUsers.isNotEmpty)
+          // 🟢 INÍCIO DA MODIFICAÇÃO (Esconder "Digitando" em Grupos) 🟢
+          if (_typingUsers.isNotEmpty && !_isGroup)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
               child: Row(
@@ -457,7 +478,6 @@ class _ChatPageState extends State<ChatPage> {
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    // Pega o nome do primeiro usuário que está digitando
                     '${_typingUsers.values.first}${_typingUsers.length > 1 ? ' e outros' : ''} está${_typingUsers.length > 1 ? 'ão' : ''} digitando...',
                     style: const TextStyle(
                       fontStyle: FontStyle.italic,
