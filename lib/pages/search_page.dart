@@ -1,7 +1,7 @@
 // lib/pages/search_page.dart
 import 'package:flutter/material.dart';
 import 'package:chat_app/services/supabase_service.dart';
-import 'dialogs/create_group_dialog.dart'; // <--- importe o diálogo que você criou
+import 'dialogs/create_group_dialog.dart'; // <--- importe o diálogo
 
 class SearchPage extends StatefulWidget {
   const SearchPage({super.key});
@@ -26,14 +26,12 @@ class _SearchPageState extends State<SearchPage> {
     try {
       final meuUserId = supabase.auth.currentUser!.id;
 
-      // Busca por users e por grupos públicos com o termo
       final users = await supabase
           .from('profiles')
           .select()
           .ilike('name', '%$query%')
           .neq('id', meuUserId);
 
-      // Grupos públicos (conversations.is_group = true AND is_public = true)
       final groups = await supabase
           .from('conversations')
           .select('id, name, avatar_url')
@@ -81,56 +79,72 @@ class _SearchPageState extends State<SearchPage> {
     }
   }
 
-  // Cria ou abre conversa com usuário
+  // 🟢 CORREÇÃO (Lógica is_group): Verifica se já existe um chat PRIVADO
   Future<void> _iniciarConversaComUsuario(String outroUserId) async {
     try {
       final meuUserId = supabase.auth.currentUser!.id;
 
-      // Procura conversa privada já existente (usando participants)
-      final existingConversations = await supabase
+      // 1. Busca todas as conversas em que EU estou
+      final myConversationsResponse = await supabase
           .from('participants')
           .select('conversation_id')
-          .inFilter('user_id', [meuUserId, outroUserId]);
+          .eq('user_id', meuUserId);
 
-      if (existingConversations != null && existingConversations.isNotEmpty) {
-        final conversationIds = existingConversations.map((p) => p['conversation_id']).toSet().toList();
-        final shared = await supabase
+      final myConversationIds = myConversationsResponse
+          .map((p) => p['conversation_id'] as String)
+          .toList();
+
+      if (myConversationIds.isNotEmpty) {
+        // 2. Dessas, filtra as que o OUTRO usuário está E NÃO SÃO GRUPO
+        final sharedPrivateChatResponse = await supabase
             .from('participants')
-            .select('conversation_id')
-            .inFilter('conversation_id', conversationIds)
-            .eq('user_id', outroUserId);
+            .select('conversation_id, conversations!inner(is_group)') // Join
+            .inFilter('conversation_id', myConversationIds) 
+            .eq('user_id', outroUserId) 
+            .eq('conversations.is_group', false) // <-- A CORREÇÃO LÓGICA
+            .maybeSingle(); 
 
-        if (shared != null && shared.isNotEmpty) {
-          final conversaId = shared.first['conversation_id'] as String;
+        if (sharedPrivateChatResponse != null) {
+          // 3. Encontrou chat privado, abre ele
+          final conversaId = sharedPrivateChatResponse['conversation_id'] as String;
           if (mounted) {
             Navigator.of(context).popAndPushNamed('/chat', arguments: conversaId);
           }
           return;
         }
       }
+      // 4. Não encontrou, joga exceção para criar um novo
+      throw Exception('Nenhum chat privado encontrado. Criando novo.');
+      
+    } catch (_) {
+      // 5. Bloco de criação (agora funciona por causa das políticas permissivas)
+      try {
+        final meuUserId = supabase.auth.currentUser!.id;
+        final conversaData = await supabase.from('conversations').insert({
+          'is_group': false
+        }).select().single(); // <--- Funciona com RLS (true)
+        final conversaId = conversaData['id'] as String;
 
-      // Cria nova conversa privada
-      final conversaData = await supabase.from('conversations').insert({'is_group': false}).select().single();
-      final conversaId = conversaData['id'] as String;
+        await supabase.from('participants').insert([
+          {'conversation_id': conversaId, 'user_id': meuUserId},
+          {'conversation_id': conversaId, 'user_id': outroUserId},
+        ]); // <--- Funciona com RLS (true)
 
-      // Adiciona participantes
-      await supabase.from('participants').insert([
-        {'conversation_id': conversaId, 'user_id': meuUserId},
-        {'conversation_id': conversaId, 'user_id': outroUserId},
-      ]);
-
-      if (mounted) Navigator.of(context).popAndPushNamed('/chat', arguments: conversaId);
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Erro ao iniciar conversa: $error'),
-          backgroundColor: Colors.red,
-        ));
+        if (mounted) {
+          Navigator.of(context).popAndPushNamed('/chat', arguments: conversaId);
+        }
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Erro ao iniciar conversa: $error'),
+            backgroundColor: Colors.red,
+          ));
+        }
       }
     }
   }
 
-  // Cria um grupo simples (nome + participantes)
+  // 🟢 CÓDIGO REVERTIDO: Lógica de criação manual (sem RPC)
   Future<void> _criarGrupoSimples(String name, List<String> participantIds) async {
     try {
       final meuUserId = supabase.auth.currentUser!.id;
@@ -138,7 +152,7 @@ class _SearchPageState extends State<SearchPage> {
           .from('conversations')
           .insert({'is_group': true, 'name': name, 'is_public': false})
           .select()
-          .single();
+          .single(); // <--- Funciona com RLS (true)
       final groupId = data['id'] as String;
 
       final inserts = [
@@ -147,9 +161,10 @@ class _SearchPageState extends State<SearchPage> {
       for (var pid in participantIds) {
         inserts.add({'conversation_id': groupId, 'user_id': pid});
       }
-      await supabase.from('participants').insert(inserts);
+      await supabase.from('participants').insert(inserts); // <--- Funciona com RLS (true)
 
       if (mounted) {
+        // Correção de navegação (sem pop() extra) já estava nesta versão
         Navigator.of(context).popAndPushNamed('/chat', arguments: groupId);
       }
     } catch (e) {
@@ -182,7 +197,6 @@ class _SearchPageState extends State<SearchPage> {
         if (type == 'user') {
           _iniciarConversaComUsuario(item['id'] as String);
         } else {
-          // entrar no grupo público: adiciona participante e abre
           _joinGroupAndOpen(item['id'] as String);
         }
       },
@@ -192,14 +206,16 @@ class _SearchPageState extends State<SearchPage> {
   Future<void> _joinGroupAndOpen(String groupId) async {
     try {
       final meuUserId = supabase.auth.currentUser!.id;
-      // verifica se já é participante
       final exists = await supabase
           .from('participants')
           .select()
-          .match({'conversation_id': groupId, 'user_id': meuUserId});
-      if (exists == null || exists.isEmpty) {
+          .match({'conversation_id': groupId, 'user_id': meuUserId})
+          .maybeSingle();
+
+      if (exists == null) {
         await supabase.from('participants').insert({'conversation_id': groupId, 'user_id': meuUserId});
       }
+      
       if (mounted) Navigator.of(context).popAndPushNamed('/chat', arguments: groupId);
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao entrar no grupo: $e')));
@@ -229,7 +245,6 @@ class _SearchPageState extends State<SearchPage> {
         child: const Icon(Icons.group_add),
         tooltip: 'Criar grupo',
         onPressed: () async {
-          // chama o diálogo novo que você criou
           final result = await showDialog<Map<String, dynamic>>(
             context: context,
             builder: (_) => const CreateGroupDialog(),

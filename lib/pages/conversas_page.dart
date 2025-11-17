@@ -34,9 +34,11 @@ class _ConversasPageState extends State<ConversasPage> {
         final id = r['user_id']?.toString();
         if (id != null) map[id] = Map<String, dynamic>.from(r);
       }
-      setState(() {
-        _presenceCache = map;
-      });
+      if (mounted) {
+        setState(() {
+          _presenceCache = map;
+        });
+      }
     });
   }
 
@@ -73,19 +75,30 @@ class _ConversasPageState extends State<ConversasPage> {
           }
 
           final conversas = snapshot.data!;
-          if (conversas.isEmpty) {
+
+          // 🟢 INÍCIO DA CORREÇÃO (Conversa Duplicada) 🟢
+          // Garante que a lista é única (baseado no ID da conversa)
+          final seenIds = <String>{};
+          final uniqueConversas = conversas.where((c) {
+            final id = c['conversation_id'] as String?;
+            if (id == null || id.isEmpty) return false;
+            // .add() retorna true se o item for NOVO no Set
+            return seenIds.add(id);
+          }).toList();
+          // 🟢 FIM DA CORREÇÃO 🟢
+
+          if (uniqueConversas.isEmpty) { // <-- Use uniqueConversas
             return const Center(child: Text("Nenhuma conversa ainda."));
           }
 
           return ListView.builder(
-            itemCount: conversas.length,
+            itemCount: uniqueConversas.length, // <-- Use uniqueConversas
             itemBuilder: (context, index) {
-              final c = conversas[index];
+              final c = uniqueConversas[index]; // <-- Use uniqueConversas
               final conversaId = c['conversation_id'] as String?;
               final name = (c['display_name'] ?? "Conversa") as String;
               final avatar = c['display_avatar'] as String?;
               final lastMsg = c['last_message'] ?? "";
-              // detect typing from participants: v_user_conversations could include typing info (if view built)
               final typingUsers = c['typing_users'] ?? '';
               final subtitle = (typingUsers != null && (typingUsers as String).isNotEmpty)
                   ? "digitando..."

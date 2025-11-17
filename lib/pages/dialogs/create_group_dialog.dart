@@ -83,6 +83,8 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
               )
             else
               SizedBox(
+                // 🟢 CORREÇÃO (Bug de Layout): Adicionada largura
+                width: double.maxFinite, 
                 height: 200,
                 child: ListView.builder(
                   itemCount: _found.length,
