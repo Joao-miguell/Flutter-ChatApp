@@ -16,7 +16,9 @@ dependencies:
 
   # 🔹 HTTP (para chamadas à Edge Function)
   http: ^1.2.0
-
+  
+  file_picker: ^8.0.0
+  
   # 🔹 Image Picker (para escolher imagens do dispositivo)
   image_picker: ^1.0.7
 

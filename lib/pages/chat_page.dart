@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:chat_app/services/supabase_service.dart';
 import 'package:chat_app/services/presence_service.dart';
@@ -38,7 +39,6 @@ class _ChatPageState extends State<ChatPage> {
   final List<String> _deletedMessageIds = [];
   final List<Map<String, dynamic>> _pendingMessages = [];
   
-  // 🟢 NOVA LISTA: Guarda IDs de solicitações que já foram resolvidas
   final Set<String> _handledRequestIds = {}; 
 
   @override
@@ -69,7 +69,6 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _loadChatDetails() async {
     if (_conversaId == null || meuUserId == null) return;
     try {
-      // 1. Busca dados básicos da conversa
       final data = await supabase
           .from('conversations')
           .select('is_group, name')
@@ -79,7 +78,6 @@ class _ChatPageState extends State<ChatPage> {
       final isGroup = data['is_group'] ?? false;
       String displayTitle = data['name'] ?? 'Chat';
 
-      // 2. Se for chat privado, busca nome do outro
       if (!isGroup) {
         final otherParticipant = await supabase
             .from('participants')
@@ -96,14 +94,13 @@ class _ChatPageState extends State<ChatPage> {
           }
         }
       } else {
-        // 🟢 3. SE FOR GRUPO: Busca solicitações JÁ RESOLVIDAS (aceitas/recusadas)
-        // Isso serve para não mostrar cards antigos quando entrar no chat
         final handledRequests = await supabase
             .from('join_requests')
-            .select('id') // O ID da request é o que está salvo no 'content' da mensagem
+            .select('id') 
             .eq('conversation_id', _conversaId!)
-            .neq('status', 'pending'); // Pega tudo que NÃO é pending
+            .neq('status', 'pending'); 
 
+        _handledRequestIds.clear(); 
         if (handledRequests != null) {
           for (var r in handledRequests) {
             _handledRequestIds.add(r['id'] as String);
@@ -236,40 +233,85 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
+  Future<void> _uploadAndSendMedia(String mimeType, String fileName, List<int> fileBytes, {bool isMedia = false}) async {
+    try {
+      final res = await http.post(
+        Uri.parse('https://ebuybhhxytldczejyxey.supabase.co/functions/v1/get-signed-upload'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'filename': fileName,
+          'mime': mimeType,
+          'folder': 'chat_media',
+        }),
+      );
+
+      if (res.statusCode != 200) throw 'Falha ao gerar URL de upload.';
+      final data = jsonDecode(res.body);
+      final key = data['key'];
+
+      final uploadRes = await http.put(
+        Uri.parse(data['uploadUrl']), 
+        headers: {'Content-Type': mimeType}, 
+        body: fileBytes,
+      );
+      if (uploadRes.statusCode != 200 && uploadRes.statusCode != 201) throw 'Erro ao enviar arquivo.';
+
+      final finalUrl = 'https://ebuybhhxytldczejyxey.supabase.co/storage/v1/object/public/chat_media/$key';
+
+      await supabase.from('messages').insert({
+        'sender_id': meuUserId,
+        'conversation_id': _conversaId,
+        'content': finalUrl,
+        'is_media': isMedia,
+        'type': isMedia ? 'image' : 'file', 
+        'file_name': fileName,
+      });
+
+    } catch (error) {
+      _showError('Erro ao enviar arquivo: $error');
+    }
+  }
+
   Future<void> _enviarImagem() async {
     try {
-      final pickedFile = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 75);
+      final pickedFile = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
       if (pickedFile == null || _conversaId == null) return;
 
       final fileBytes = await pickedFile.readAsBytes();
       final fileName = pickedFile.name;
+      
+      await _uploadAndSendMedia('image/jpeg', fileName, fileBytes, isMedia: true);
 
-      final res = await http.post(
-        Uri.parse('https://ebuybhhxytldczejyxey.supabase.co/functions/v1/get-signed-upload'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'filename': fileName, 'mime': 'image/jpeg', 'folder': 'chat_media'}),
-      );
-
-      if (res.statusCode != 200) throw 'Falha ao gerar URL';
-      final data = jsonDecode(res.body);
-      final key = data['key'];
-      final uploadRes = await http.put(Uri.parse(data['uploadUrl']), headers: {'Content-Type': 'image/jpeg'}, body: fileBytes);
-      if (uploadRes.statusCode != 200 && uploadRes.statusCode != 201) throw 'Erro ao enviar imagem';
-
-      final finalUrl = 'https://ebuybhhxytldczejyxey.supabase.co/storage/v1/object/public/chat_media/$key?t=${DateTime.now().millisecondsSinceEpoch}';
-
-      final meuId = supabase.auth.currentUser!.id;
-      await supabase.from('messages').insert({
-        'sender_id': meuId,
-        'conversation_id': _conversaId,
-        'content': finalUrl,
-        'is_media': true,
-        'type': 'image', 
-      });
     } catch (error) {
       _showError('Erro ao enviar imagem: $error');
     }
   }
+
+  Future<void> _enviarArquivoLeve() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt', 'zip', 'rar'],
+      );
+
+      if (result == null || result.files.single.bytes == null || _conversaId == null) return;
+
+      final file = result.files.single;
+      final fileBytes = file.bytes!;
+      final fileName = file.name;
+      final mimeType = file.extension ?? 'application/octet-stream';
+      
+      if (fileBytes.length > 20 * 1024 * 1024) {
+        throw 'Arquivo muito grande (máximo 20 MB).';
+      }
+
+      await _uploadAndSendMedia(mimeType, fileName, fileBytes, isMedia: false);
+
+    } catch (error) {
+      _showError('Erro ao enviar arquivo: $error');
+    }
+  }
+
 
   Future<void> _confirmDelete(String messageId) async {
     final confirm = await showDialog<bool>(
@@ -349,24 +391,15 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _handleJoinRequest(String requestId, String userId, String messageId, bool accept) async {
     try {
-      // 🟢 1. Adiciona à lista de "Já tratados" para sumir da tela agora (mesmo se voltar depois)
       setState(() {
-        _handledRequestIds.add(requestId); // Bloqueia pela ID da request
-        _deletedMessageIds.add(messageId); // Bloqueia pela ID da mensagem (otimista)
+        _handledRequestIds.add(requestId); 
+        _deletedMessageIds.add(messageId); 
       });
 
-      // 2. Atualiza status
-      await supabase.from('join_requests').update({
-        'status': accept ? 'accepted' : 'rejected'
-      }).eq('id', requestId);
+      await supabase.from('join_requests').update({'status': accept ? 'accepted' : 'rejected'}).eq('id', requestId);
 
       if (accept) {
-        // 3. Adiciona ao grupo
-        await supabase.from('participants').insert({
-          'conversation_id': _conversaId,
-          'user_id': userId
-        });
-        // 4. Aviso no chat
+        await supabase.from('participants').insert({'conversation_id': _conversaId, 'user_id': userId});
         final profile = await ProfileCache.getProfile(userId);
         final name = profile?['name'] ?? 'Usuário';
         await supabase.from('messages').insert({
@@ -377,7 +410,6 @@ class _ChatPageState extends State<ChatPage> {
         });
       }
 
-      // 5. Tenta apagar a mensagem do banco (limpeza)
       await supabase.from('messages').delete().eq('id', messageId);
 
     } catch (e) {
@@ -385,7 +417,7 @@ class _ChatPageState extends State<ChatPage> {
         _handledRequestIds.remove(requestId);
         _deletedMessageIds.remove(messageId);
       });
-      _showError('Erro ao processar: $e');
+      _showError('Erro ao processar solicitação: $e');
     }
   }
 
@@ -447,7 +479,42 @@ class _ChatPageState extends State<ChatPage> {
                   return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(_chatTitle), if (subtitle.isNotEmpty) Text(subtitle, style: const TextStyle(fontSize: 12, color: Colors.white70))]);
                 },
               ),
-        actions: [IconButton(icon: const Icon(Icons.image), onPressed: _enviarImagem)],
+        actions: [
+          PopupMenuButton<String>(
+            onSelected: (String result) {
+              if (result == 'image') {
+                _enviarImagem();
+              } else if (result == 'file') {
+                _enviarArquivoLeve();
+              }
+            },
+            // 🟢 CORREÇÃO: Usando a propriedade 'child' com um Row para incluir o ícone
+            itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+              PopupMenuItem<String>(
+                value: 'image',
+                child: Row(
+                  children: [
+                    const Icon(Icons.photo),
+                    const SizedBox(width: 8),
+                    const Text('Imagem/Foto'),
+                  ],
+                ),
+              ),
+              PopupMenuItem<String>(
+                value: 'file',
+                child: Row(
+                  children: [
+                    const Icon(Icons.insert_drive_file),
+                    const SizedBox(width: 8),
+                    const Text('Documento/Arquivo Leve'),
+                  ],
+                ),
+              ),
+            ],
+            icon: const Icon(Icons.attach_file),
+            tooltip: 'Anexar Arquivo',
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -464,16 +531,12 @@ class _ChatPageState extends State<ChatPage> {
                   return da.compareTo(db);
                 });
                 
-                // 🟢 FILTRO PODEROSO: Apagadas (texto) OU Resolvidas (request) 🟢
                 allMessages = allMessages.where((m) {
                   final id = m['id'];
                   final type = m['type'];
-                  final content = m['content']; // Em requests, content é o requestId
+                  final content = m['content'];
 
-                  // Se foi apagada (texto) -> remove
                   if (_deletedMessageIds.contains(id)) return false;
-
-                  // Se for request E já estiver resolvida -> remove
                   if (type == 'join_request' && _handledRequestIds.contains(content)) return false;
 
                   return true;
@@ -537,8 +600,10 @@ class _ChatPageState extends State<ChatPage> {
 
                     final isMine = senderId == meuUserIdLocal;
                     final isMedia = (message['is_media'] ?? false) == true || type == 'image';
+                    final isFile = type == 'file';
                     final isEdited = (message['is_edited'] ?? false) == true;
                     final isSending = message['status'] == 'sending';
+                    final fileName = message['file_name'] ?? 'Arquivo';
 
                     return FutureBuilder<Map<String, dynamic>?>(
                       future: _getSenderProfileCached(senderId ?? ''),
@@ -571,7 +636,25 @@ class _ChatPageState extends State<ChatPage> {
                                         children: [
                                           Text(isMine ? 'Você' : senderName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.white70)),
                                           const SizedBox(height: 6),
-                                          if (isMedia)
+                                          if (isFile)
+                                            GestureDetector(
+                                              onTap: () {
+                                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Abrindo arquivo: $fileName')));
+                                              },
+                                              child: Container(
+                                                padding: const EdgeInsets.all(8),
+                                                decoration: BoxDecoration(color: Colors.black26, borderRadius: BorderRadius.circular(8)),
+                                                child: Row(
+                                                  mainAxisSize: MainAxisSize.min,
+                                                  children: [
+                                                    const Icon(Icons.insert_drive_file, color: Colors.white),
+                                                    const SizedBox(width: 8),
+                                                    Flexible(child: Text(fileName, style: const TextStyle(color: Colors.white))),
+                                                  ],
+                                                ),
+                                              ),
+                                            )
+                                          else if (isMedia)
                                             ClipRRect(borderRadius: BorderRadius.circular(12), child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 220, maxHeight: 220), child: Image.network(content, fit: BoxFit.cover)))
                                           else
                                             Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end, children: [Flexible(child: Text(content, style: const TextStyle(color: Colors.white))), if (isEdited) const Padding(padding: EdgeInsets.only(left: 6, top: 4), child: Text('(editado)', style: TextStyle(fontSize: 10, color: Colors.white60, fontStyle: FontStyle.italic)))]),
