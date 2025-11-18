@@ -26,13 +26,12 @@ class _ChatPageState extends State<ChatPage> {
   String? meuUserId;
   Map<String, List<Map<String, dynamic>>> _reactionsCache = {};
 
-  // 🟢 INÍCIO DAS ADIÇÕES (Online/Digitando/Grupo) 🟢
+  // Variáveis de Estado
   StreamSubscription? _presenceSubscription;
-  final Map<String, String> _typingUsers = {}; // <UserID, UserName>
-  bool _isGroup = false; // Por padrão, assume que não é grupo
-  bool _isLoadingInfo = true; // Para saber quando a info do chat carregou
-  // 🟢 FIM DAS ADIÇÕES 🟢
-
+  final Map<String, String> _typingUsers = {}; 
+  bool _isGroup = false;
+  bool _isLoadingInfo = true;
+  String _chatTitle = 'Carregando...'; // 🟢 NOVA VARIÁVEL PARA O TÍTULO
 
   @override
   void didChangeDependencies() {
@@ -50,39 +49,60 @@ class _ChatPageState extends State<ChatPage> {
         .eq('conversation_id', _conversaId!)
         .order('created_at', ascending: true);
 
-    // 🟢 INÍCIO DAS MUDANÇAS 🟢
-    // 1. Carrega o tipo da conversa (grupo ou não)
-    _loadConversationType();
-    // 2. Ouve a presença
+    // 🟢 Carrega detalhes (Nome do chat/grupo)
+    _loadChatDetails();
     _listenToPresence();
-    // 🟢 FIM DAS MUDANÇAS 🟢
 
-    // Ao entrar no chat, marca online e typing null
     if (meuUserId != null) {
       PresenceService.setOnline(meuUserId!);
       PresenceService.setTyping(meuUserId!, null);
     }
   }
 
-  // 🟢 INÍCIO DAS ADIÇÕES 🟢
-  Future<void> _loadConversationType() async {
-    if (_conversaId == null) return;
+  // 🟢 NOVA FUNÇÃO: Busca o nome real do chat (Grupo ou Usuário)
+  Future<void> _loadChatDetails() async {
+    if (_conversaId == null || meuUserId == null) return;
+    
     try {
+      // 1. Busca dados da conversa (se é grupo e o nome)
       final data = await supabase
           .from('conversations')
-          .select('is_group')
+          .select('is_group, name')
           .eq('id', _conversaId!)
           .single();
       
+      final isGroup = data['is_group'] ?? false;
+      String displayTitle = data['name'] ?? 'Chat';
+
+      // 2. Se NÃO for grupo, precisamos descobrir o nome da outra pessoa
+      if (!isGroup) {
+        // Busca o participante que NÃO SOU EU
+        final otherParticipant = await supabase
+            .from('participants')
+            .select('user_id')
+            .eq('conversation_id', _conversaId!)
+            .neq('user_id', meuUserId!)
+            .maybeSingle();
+        
+        if (otherParticipant != null) {
+          final otherId = otherParticipant['user_id'] as String;
+          // Usa o cache para pegar o nome dele
+          final profile = await ProfileCache.getProfile(otherId);
+          if (profile != null) {
+            displayTitle = profile['name'] ?? 'Usuário';
+          }
+        }
+      }
+
       if (mounted) {
         setState(() {
-          _isGroup = data['is_group'] ?? false;
+          _isGroup = isGroup;
+          _chatTitle = displayTitle; // Define o título correto
           _isLoadingInfo = false;
         });
       }
     } catch (e) {
       if (mounted) setState(() => _isLoadingInfo = false);
-      // Se falhar, assume que não é grupo e continua
     }
   }
 
@@ -95,11 +115,9 @@ class _ChatPageState extends State<ChatPage> {
       final newTypingUsers = <String, String>{};
       for (final state in states) {
         final userId = state['user_id'] as String?;
-        // 🟢 CORREÇÃO: Coluna 'typing_conversation'
         final typingAt = state['typing_conversation'] as String?;
         final userName = ProfileCache.cachedProfiles[userId]?['name'] ?? 'Alguém';
 
-        // Verifica se o usuário está digitando *nesta* conversa
         if (userId != null && 
             userId != meuUserId && 
             typingAt == _conversaId) {
@@ -107,7 +125,6 @@ class _ChatPageState extends State<ChatPage> {
         }
       }
 
-      // Compara os mapas para evitar rebuilds desnecessários
       if (newTypingUsers.keys.length != _typingUsers.keys.length ||
           !newTypingUsers.keys.every((k) => _typingUsers.containsKey(k))) {
         if (mounted) {
@@ -134,17 +151,13 @@ class _ChatPageState extends State<ChatPage> {
           await ProfileCache.getProfile(userId);
         }
       }
-    } catch (_) {
-      // falha silenciosa
-    }
+    } catch (_) {}
   }
-  // 🟢 FIM DAS ADIÇÕES 🟢
-
 
   @override
   void dispose() {
     _messageController.dispose();
-    _presenceSubscription?.cancel(); // 🟢 ADICIONADO 🟢
+    _presenceSubscription?.cancel();
     if (meuUserId != null) {
       PresenceService.setTyping(meuUserId!, null);
     }
@@ -154,7 +167,6 @@ class _ChatPageState extends State<ChatPage> {
   Future<Map<String, dynamic>?> _getSenderProfileCached(String senderId) =>
       ProfileCache.getProfile(senderId);
 
-  /// Envia mensagem de texto
   Future<void> _enviarMensagem() async {
     final content = _messageController.text.trim();
     if (content.isEmpty || _conversaId == null) return;
@@ -173,7 +185,6 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  /// Envia imagem via Edge Function
   Future<void> _enviarImagem() async {
     try {
       final pickedFile = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 75);
@@ -192,19 +203,14 @@ class _ChatPageState extends State<ChatPage> {
         }),
       );
 
-      if (res.statusCode != 200) {
-        throw 'Falha ao gerar URL de upload (${res.statusCode})';
-      }
+      if (res.statusCode != 200) throw 'Falha ao gerar URL (${res.statusCode})';
 
       final data = jsonDecode(res.body);
       final uploadUrl = data['uploadUrl'];
       final key = data['key'];
 
       final uploadRes = await http.put(Uri.parse(uploadUrl), headers: {'Content-Type': 'image/jpeg'}, body: fileBytes);
-
-      if (uploadRes.statusCode != 200 && uploadRes.statusCode != 201) {
-        throw 'Erro ao enviar imagem (${uploadRes.statusCode})';
-      }
+      if (uploadRes.statusCode != 200 && uploadRes.statusCode != 201) throw 'Erro ao enviar imagem';
 
       final baseUrl = 'https://ebuybhhxytldczejyxey.supabase.co/storage/v1/object/public/chat_media/$key';
       final finalUrl = '$baseUrl?t=${DateTime.now().millisecondsSinceEpoch}';
@@ -226,7 +232,6 @@ class _ChatPageState extends State<ChatPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
   }
 
-  // Reações
   Future<void> _onMessageLongPress(Map<String, dynamic> message) async {
     final selected = await showModalBottomSheet<String>(
       context: context,
@@ -271,18 +276,14 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _refreshReactions(List<Map<String, dynamic>> messages) async {
     if (!mounted) return;
-    // atualiza cache de reações para as mensagens visíveis
     for (var m in messages) {
       final mid = m['id'] as String;
       final rows = await supabase.from('reactions').select('emoji, user_id').eq('message_id', mid);
-      // agregação simples
       final agg = <String, int>{};
       if (rows != null) {
         for (var r in rows) {
           final e = r['emoji'] as String? ?? '';
-          if (e.isNotEmpty) {
-             agg[e] = (agg[e] ?? 0) + 1;
-          }
+          if (e.isNotEmpty) agg[e] = (agg[e] ?? 0) + 1;
         }
       }
       final list = agg.entries.map((e) => {'emoji': e.key, 'count': e.value}).toList();
@@ -307,16 +308,13 @@ class _ChatPageState extends State<ChatPage> {
 
     return Scaffold(
       appBar: AppBar(
-        // 🟢 INÍCIO DA MODIFICAÇÃO (Esconder Status de Grupo) 🟢
+        // 🟢 TÍTULO CORRIGIDO 🟢
         title: _isGroup 
-            // Se for grupo, mostra o título simples
-            ? Text(_conversaId != null ? 'Chat (${_conversaId!.substring(0, 6)})' : 'Chat')
-            // Se NÃO for grupo, mostra o status online
-            : StreamBuilder(
+            ? Text(_chatTitle) // Se for grupo, mostra o nome do grupo
+            : StreamBuilder(   // Se for privado, mostra nome + status
                 stream: PresenceService.presenceStream(),
                 builder: (context, snapshot) {
-                  String title = _conversaId != null ? 'Chat (${_conversaId!.substring(0, 6)})' : 'Chat';
-                  String subtitle = ''; // Status padrão
+                  String subtitle = '';
                   
                   if (snapshot.hasData) {
                     final states = snapshot.data!;
@@ -337,7 +335,7 @@ class _ChatPageState extends State<ChatPage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Text(title),
+                      Text(_chatTitle), // Mostra o nome da pessoa
                       if (subtitle.isNotEmpty)
                         Text(
                           subtitle,
@@ -347,7 +345,6 @@ class _ChatPageState extends State<ChatPage> {
                   );
                 },
               ),
-        // 🟢 FIM DA MODIFICAÇÃO 🟢
         actions: [
           IconButton(icon: const Icon(Icons.image), tooltip: 'Enviar imagem', onPressed: _enviarImagem),
         ],
@@ -465,7 +462,6 @@ class _ChatPageState extends State<ChatPage> {
             ),
           ),
           
-          // 🟢 INÍCIO DA MODIFICAÇÃO (Esconder "Digitando" em Grupos) 🟢
           if (_typingUsers.isNotEmpty && !_isGroup)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
@@ -487,7 +483,6 @@ class _ChatPageState extends State<ChatPage> {
                 ],
               ),
             ),
-          // 🟢 FIM DAS ADIÇÕES 🟢
 
           SafeArea(
             child: Padding(

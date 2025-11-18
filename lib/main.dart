@@ -1,3 +1,4 @@
+// lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -8,7 +9,10 @@ import 'pages/register_page.dart';
 import 'pages/conversas_page.dart';
 import 'pages/chat_page.dart';
 import 'pages/search_page.dart';
-import 'pages/profile_page.dart'; // ✅ IMPORT CORRETO
+import 'pages/profile_page.dart';
+
+// SERVIÇOS (Importante para atualizar o status)
+import 'services/presence_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -24,13 +28,70 @@ Future<void> main() async {
 
 final supabase = Supabase.instance.client;
 
-class MyApp extends StatelessWidget {
+// 🟢 Mudamos para StatefulWidget para usar WidgetsBindingObserver
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
+  
+  @override
+  void initState() {
+    super.initState();
+    // Registra este widget para ouvir mudanças no ciclo de vida (abrir/fechar app)
+    WidgetsBinding.instance.addObserver(this);
+    
+    // Se o usuário já estiver logado ao abrir o app, marca como Online
+    _updatePresence(true);
+  }
+
+  @override
+  void dispose() {
+    // Remove o observador quando o app é destruído
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // 🟢 DETECTA QUANDO O APP É ABERTO, FECHADO OU MINIMIZADO
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final userId = supabase.auth.currentUser?.id;
+    if (userId == null) return;
+
+    switch (state) {
+      case AppLifecycleState.resumed:
+        // App voltou para o foco (Online)
+        PresenceService.setOnline(userId);
+        break;
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+      case AppLifecycleState.inactive: // Adicionado para cobrir mais casos
+      case AppLifecycleState.hidden:   // Adicionado para cobrir mais casos
+        // App foi minimizado ou fechado (Offline)
+        PresenceService.setOffline(userId);
+        break;
+    }
+  }
+
+  Future<void> _updatePresence(bool isOnline) async {
+    final userId = supabase.auth.currentUser?.id;
+    if (userId != null) {
+      if (isOnline) {
+        await PresenceService.setOnline(userId);
+      } else {
+        await PresenceService.setOffline(userId);
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Flutter Chat App',
+      debugShowCheckedModeBanner: false, // Remove a etiqueta "Debug"
       theme: ThemeData.dark().copyWith(
         primaryColor: Colors.blue,
         inputDecorationTheme: const InputDecorationTheme(
@@ -45,7 +106,7 @@ class MyApp extends StatelessWidget {
         '/home': (context) => const ConversasPage(),
         '/chat': (context) => const ChatPage(),
         '/search': (context) => const SearchPage(),
-        '/profile': (context) => const ProfilePage(), // ✅ AGORA FUNCIONA
+        '/profile': (context) => const ProfilePage(),
       },
     );
   }

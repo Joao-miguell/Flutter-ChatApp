@@ -33,13 +33,14 @@ class _SearchPageState extends State<SearchPage> {
           .ilike('name', '%$query%')
           .neq('id', meuUserId);
 
-      // Busca por grupos públicos
+      // 🟢 CORREÇÃO: Busca de Grupos 🟢
+      // Removi o filtro .eq('is_public', true) para que ele ache
+      // até os grupos que foram criados incorretamente como privados.
       final groups = await supabase
           .from('conversations')
           .select('id, name, avatar_url')
           .ilike('name', '%$query%')
-          .eq('is_group', true)
-          .eq('is_public', true); // <-- Código já busca grupos
+          .eq('is_group', true); 
 
       final results = <Map<String, dynamic>>[];
 
@@ -81,7 +82,7 @@ class _SearchPageState extends State<SearchPage> {
     }
   }
 
-  // 🟢 CORREÇÃO (Lógica is_group): Verifica se já existe um chat PRIVADO
+  // Lógica para iniciar conversa privada
   Future<void> _iniciarConversaComUsuario(String outroUserId) async {
     try {
       final meuUserId = supabase.auth.currentUser!.id;
@@ -103,7 +104,7 @@ class _SearchPageState extends State<SearchPage> {
             .select('conversation_id, conversations!inner(is_group)') // Join
             .inFilter('conversation_id', myConversationIds) 
             .eq('user_id', outroUserId) 
-            .eq('conversations.is_group', false) // <-- A CORREÇÃO LÓGICA
+            .eq('conversations.is_group', false)
             .maybeSingle(); 
 
         if (sharedPrivateChatResponse != null) {
@@ -119,7 +120,7 @@ class _SearchPageState extends State<SearchPage> {
       throw Exception('Nenhum chat privado encontrado. Criando novo.');
       
     } catch (_) {
-      // 5. Bloco de criação (agora funciona por causa das políticas permissivas)
+      // 5. Bloco de criação
       try {
         final meuUserId = supabase.auth.currentUser!.id;
         final conversaData = await supabase.from('conversations').insert({
@@ -146,13 +147,14 @@ class _SearchPageState extends State<SearchPage> {
     }
   }
 
-  // Lógica de criação manual (funciona com as políticas permissivas)
+  // 🟢 CORREÇÃO: Criação de Grupo 🟢
   Future<void> _criarGrupoSimples(String name, List<String> participantIds) async {
     try {
       final meuUserId = supabase.auth.currentUser!.id;
       final data = await supabase
           .from('conversations')
-          .insert({'is_group': true, 'name': name, 'is_public': false})
+          // Agora definimos 'is_public: true' para garantir que apareça na busca futura
+          .insert({'is_group': true, 'name': name, 'is_public': true}) 
           .select()
           .single(); 
       final groupId = data['id'] as String;
@@ -166,7 +168,6 @@ class _SearchPageState extends State<SearchPage> {
       await supabase.from('participants').insert(inserts); 
 
       if (mounted) {
-        // Correção de navegação (sem pop() extra)
         Navigator.of(context).popAndPushNamed('/chat', arguments: groupId);
       }
     } catch (e) {
