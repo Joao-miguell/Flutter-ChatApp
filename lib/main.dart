@@ -11,7 +11,7 @@ import 'pages/chat_page.dart';
 import 'pages/search_page.dart';
 import 'pages/profile_page.dart';
 
-// SERVIÇOS (Importante para atualizar o status)
+// SERVIÇOS
 import 'services/presence_service.dart';
 
 Future<void> main() async {
@@ -28,7 +28,9 @@ Future<void> main() async {
 
 final supabase = Supabase.instance.client;
 
-// 🟢 Mudamos para StatefulWidget para usar WidgetsBindingObserver
+// 🟢 1. CRIAMOS O OBSERVADOR GLOBAL
+final RouteObserver<ModalRoute<void>> routeObserver = RouteObserver<ModalRoute<void>>();
+
 class MyApp extends StatefulWidget {
   const MyApp({super.key});
 
@@ -41,21 +43,16 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
-    // Registra este widget para ouvir mudanças no ciclo de vida (abrir/fechar app)
     WidgetsBinding.instance.addObserver(this);
-    
-    // Se o usuário já estiver logado ao abrir o app, marca como Online
     _updatePresence(true);
   }
 
   @override
   void dispose() {
-    // Remove o observador quando o app é destruído
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
-  // 🟢 DETECTA QUANDO O APP É ABERTO, FECHADO OU MINIMIZADO
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final userId = supabase.auth.currentUser?.id;
@@ -63,14 +60,12 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
 
     switch (state) {
       case AppLifecycleState.resumed:
-        // App voltou para o foco (Online)
         PresenceService.setOnline(userId);
         break;
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
-      case AppLifecycleState.inactive: // Adicionado para cobrir mais casos
-      case AppLifecycleState.hidden:   // Adicionado para cobrir mais casos
-        // App foi minimizado ou fechado (Offline)
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.hidden:
         PresenceService.setOffline(userId);
         break;
     }
@@ -91,13 +86,15 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Flutter Chat App',
-      debugShowCheckedModeBanner: false, // Remove a etiqueta "Debug"
+      debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         primaryColor: Colors.blue,
         inputDecorationTheme: const InputDecorationTheme(
           border: OutlineInputBorder(),
         ),
       ),
+      // 🟢 2. REGISTRAMOS O OBSERVADOR AQUI
+      navigatorObservers: [routeObserver], 
       initialRoute: '/',
       routes: {
         '/': (context) => const SplashPage(),
