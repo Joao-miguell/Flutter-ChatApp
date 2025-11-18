@@ -1,6 +1,7 @@
 // lib/services/presence_service.dart
 import 'dart:async';
 import 'package:chat_app/services/supabase_service.dart';
+import 'package:chat_app/services/profile_cache.dart'; // 🟢 Novo Import
 
 class PresenceService {
   static Stream<List<Map<String, dynamic>>> presenceStream({String? conversationId}) {
@@ -10,9 +11,20 @@ class PresenceService {
         .order('updated_at', ascending: true);
   }
 
-  /// Marca usuário como online (upsert)
+  /// 🟢 VERIFICA O CACHE antes de marcar como online
   static Future<void> setOnline(String userId) async {
     try {
+      final profile = await ProfileCache.getProfile(userId);
+      // Se a opção de ocultar estiver desativada (show_online_status = false), 
+      // não marca o usuário como online.
+      final shouldShow = profile?['show_online_status'] ?? true; 
+
+      if (!shouldShow) {
+        // Se a opção está desativada, garantimos que ele está offline
+        await setOffline(userId); 
+        return;
+      }
+
       await supabase.from('user_presence').upsert({
         'user_id': userId,
         'is_online': true,
@@ -49,6 +61,9 @@ class PresenceService {
   /// Marca usuário como digitando em determinada conversa (ou null para parar)
   static Future<void> setTyping(String userId, String? conversationId) async {
     try {
+      // 🟢 Opcional: Impedir que envie "digitando" se status online estiver oculto.
+      // A setOnline já cuida de manter is_online=false, mas vamos garantir o mínimo de envio.
+      
       await supabase.from('user_presence').upsert({
         'user_id': userId,
         'typing_conversation': conversationId,

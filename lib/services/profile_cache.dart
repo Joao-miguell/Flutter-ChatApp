@@ -2,30 +2,26 @@
 import 'package:chat_app/main.dart'; // Importa o 'supabase' global de main.dart
 
 class ProfileCache {
-  // 🟢 CORREÇÃO: Renomeado de '_cache' (privado) para 'cachedProfiles' (público)
   static final Map<String, Map<String, dynamic>> cachedProfiles = {};
 
-  /// Retorna { 'name': ..., 'avatar_url': ... } ou null.
+  /// Retorna { 'name': ..., 'avatar_url': ..., 'show_online_status': ...} ou null.
   static Future<Map<String, dynamic>?> getProfile(String id) async {
-    // 🟢 CORREÇÃO: Usa 'cachedProfiles'
     if (cachedProfiles.containsKey(id)) return cachedProfiles[id];
 
+    // 🟢 ATUALIZADO: Seleciona a nova coluna 'show_online_status'
     final res = await supabase
         .from('profiles')
-        .select('name, avatar_url')
+        .select('name, avatar_url, show_online_status')
         .eq('id', id)
         .maybeSingle();
 
-    // 🟢 CORREÇÃO: Usa 'cachedProfiles'
     if (res != null) cachedProfiles[id] = Map<String, dynamic>.from(res);
     return res == null ? null : Map<String, dynamic>.from(res);
   }
 
   static void setProfile(String id, Map<String, dynamic> profile) {
-    // 🟢 CORREÇÃO: Usa 'cachedProfiles'
     cachedProfiles[id] = profile;
   }
 
-  // 🟢 CORREÇÃO: Usa 'cachedProfiles'
   static void clear() => cachedProfiles.clear();
 }
