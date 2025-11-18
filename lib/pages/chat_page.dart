@@ -37,6 +37,9 @@ class _ChatPageState extends State<ChatPage> {
 
   final List<String> _deletedMessageIds = [];
   final List<Map<String, dynamic>> _pendingMessages = [];
+  
+  // 🟢 NOVA LISTA: Guarda IDs de solicitações que já foram resolvidas
+  final Set<String> _handledRequestIds = {}; 
 
   @override
   void didChangeDependencies() {
@@ -66,6 +69,7 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _loadChatDetails() async {
     if (_conversaId == null || meuUserId == null) return;
     try {
+      // 1. Busca dados básicos da conversa
       final data = await supabase
           .from('conversations')
           .select('is_group, name')
@@ -75,6 +79,7 @@ class _ChatPageState extends State<ChatPage> {
       final isGroup = data['is_group'] ?? false;
       String displayTitle = data['name'] ?? 'Chat';
 
+      // 2. Se for chat privado, busca nome do outro
       if (!isGroup) {
         final otherParticipant = await supabase
             .from('participants')
@@ -88,6 +93,20 @@ class _ChatPageState extends State<ChatPage> {
           final profile = await ProfileCache.getProfile(otherId);
           if (profile != null) {
             displayTitle = profile['name'] ?? 'Usuário';
+          }
+        }
+      } else {
+        // 🟢 3. SE FOR GRUPO: Busca solicitações JÁ RESOLVIDAS (aceitas/recusadas)
+        // Isso serve para não mostrar cards antigos quando entrar no chat
+        final handledRequests = await supabase
+            .from('join_requests')
+            .select('id') // O ID da request é o que está salvo no 'content' da mensagem
+            .eq('conversation_id', _conversaId!)
+            .neq('status', 'pending'); // Pega tudo que NÃO é pending
+
+        if (handledRequests != null) {
+          for (var r in handledRequests) {
+            _handledRequestIds.add(r['id'] as String);
           }
         }
       }
@@ -328,16 +347,15 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
-  // 🟢 LÓGICA DE APROVAÇÃO/RECUSA (ATUALIZADA) 🟢
   Future<void> _handleJoinRequest(String requestId, String userId, String messageId, bool accept) async {
     try {
-      
-      // 1. Remove IMEDIATAMENTE o card da tela (Otimismo)
+      // 🟢 1. Adiciona à lista de "Já tratados" para sumir da tela agora (mesmo se voltar depois)
       setState(() {
-        _deletedMessageIds.add(messageId);
+        _handledRequestIds.add(requestId); // Bloqueia pela ID da request
+        _deletedMessageIds.add(messageId); // Bloqueia pela ID da mensagem (otimista)
       });
 
-      // 2. Atualiza status na tabela join_requests
+      // 2. Atualiza status
       await supabase.from('join_requests').update({
         'status': accept ? 'accepted' : 'rejected'
       }).eq('id', requestId);
@@ -348,7 +366,7 @@ class _ChatPageState extends State<ChatPage> {
           'conversation_id': _conversaId,
           'user_id': userId
         });
-        // 4. Aviso no chat (Este vai aparecer novo)
+        // 4. Aviso no chat
         final profile = await ProfileCache.getProfile(userId);
         final name = profile?['name'] ?? 'Usuário';
         await supabase.from('messages').insert({
@@ -359,15 +377,15 @@ class _ChatPageState extends State<ChatPage> {
         });
       }
 
-      // 5. Remove a mensagem de solicitação do banco para garantir
+      // 5. Tenta apagar a mensagem do banco (limpeza)
       await supabase.from('messages').delete().eq('id', messageId);
 
     } catch (e) {
-      // Se der erro, traz o card de volta
       setState(() {
+        _handledRequestIds.remove(requestId);
         _deletedMessageIds.remove(messageId);
       });
-      _showError('Erro ao processar solicitação: $e');
+      _showError('Erro ao processar: $e');
     }
   }
 
@@ -445,7 +463,21 @@ class _ChatPageState extends State<ChatPage> {
                   final db = DateTime.tryParse(b['created_at'].toString()) ?? DateTime.now();
                   return da.compareTo(db);
                 });
-                allMessages = allMessages.where((m) => !_deletedMessageIds.contains(m['id'])).toList();
+                
+                // 🟢 FILTRO PODEROSO: Apagadas (texto) OU Resolvidas (request) 🟢
+                allMessages = allMessages.where((m) {
+                  final id = m['id'];
+                  final type = m['type'];
+                  final content = m['content']; // Em requests, content é o requestId
+
+                  // Se foi apagada (texto) -> remove
+                  if (_deletedMessageIds.contains(id)) return false;
+
+                  // Se for request E já estiver resolvida -> remove
+                  if (type == 'join_request' && _handledRequestIds.contains(content)) return false;
+
+                  return true;
+                }).toList();
 
                 if (allMessages.isEmpty) return const Center(child: Text('Nenhuma mensagem ainda.'));
                 
@@ -484,13 +516,11 @@ class _ChatPageState extends State<ChatPage> {
                                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                                     children: [
                                       ElevatedButton(
-                                        // 🟢 PASSA O ID DA MENSAGEM TAMBÉM
                                         onPressed: () => _handleJoinRequest(requestId, senderId!, message['id'], false),
                                         style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
                                         child: const Text('Recusar'),
                                       ),
                                       ElevatedButton(
-                                        // 🟢 PASSA O ID DA MENSAGEM TAMBÉM
                                         onPressed: () => _handleJoinRequest(requestId, senderId!, message['id'], true),
                                         style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
                                         child: const Text('Aceitar'),
