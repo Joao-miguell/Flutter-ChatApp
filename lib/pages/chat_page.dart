@@ -9,8 +9,6 @@ import 'package:chat_app/services/presence_service.dart';
 import 'package:chat_app/services/typing_service.dart';
 import 'package:chat_app/services/reaction_service.dart';
 import 'package:chat_app/services/profile_cache.dart';
-// 🟢 IMPORTANTE: Adicione uuid no pubspec.yaml se não tiver, ou use DateTime para ID temporário simples
-// Para simplificar aqui, usaremos DateTime como ID temporário.
 
 class ChatPage extends StatefulWidget {
   const ChatPage({super.key});
@@ -37,9 +35,8 @@ class _ChatPageState extends State<ChatPage> {
   String? _editingMessageId; 
   bool get _isEditing => _editingMessageId != null;
 
-  // Listas para otimização visual (Instantaneidade)
-  final List<String> _deletedMessageIds = []; // Mensagens que o usuário apagou
-  final List<Map<String, dynamic>> _pendingMessages = []; // 🟢 Mensagens sendo enviadas
+  final List<String> _deletedMessageIds = [];
+  final List<Map<String, dynamic>> _pendingMessages = [];
 
   @override
   void didChangeDependencies() {
@@ -160,7 +157,6 @@ class _ChatPageState extends State<ChatPage> {
     final id = supabase.auth.currentUser!.id;
 
     if (_isEditing) {
-      // Edição não precisa ser otimista visualmente, pois é rápida
       try {
         await supabase.from('messages').update({
           'content': content,
@@ -174,7 +170,6 @@ class _ChatPageState extends State<ChatPage> {
         _showError('Erro ao editar: $e');
       }
     } else {
-      // 🟢 ENVIO OTIMISTA 🟢
       final tempId = 'temp-${DateTime.now().millisecondsSinceEpoch}';
       final tempMessage = {
         'id': tempId,
@@ -184,7 +179,8 @@ class _ChatPageState extends State<ChatPage> {
         'created_at': DateTime.now().toIso8601String(),
         'is_media': false,
         'is_edited': false,
-        'status': 'sending' // Marcador local
+        'type': 'text', 
+        'status': 'sending'
       };
 
       setState(() {
@@ -197,9 +193,9 @@ class _ChatPageState extends State<ChatPage> {
           'sender_id': id,
           'conversation_id': _conversaId,
           'content': content,
+          'type': 'text', 
         });
         
-        // Sucesso: remove a mensagem temporária (o stream trará a real)
         if (mounted) {
           setState(() {
             _pendingMessages.removeWhere((m) => m['id'] == tempId);
@@ -210,12 +206,11 @@ class _ChatPageState extends State<ChatPage> {
         PresenceService.setTyping(id, null);
 
       } catch (error) {
-        // Erro: remove a temporária e avisa
         if (mounted) {
           setState(() {
             _pendingMessages.removeWhere((m) => m['id'] == tempId);
           });
-          _messageController.text = content; // Devolve o texto para o campo
+          _messageController.text = content;
         }
         _showError('Erro ao enviar: $error');
       }
@@ -223,8 +218,6 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _enviarImagem() async {
-    // Para imagem, é mais complexo fazer otimista sem mostrar o upload progress
-    // Vamos manter o padrão por enquanto.
     try {
       final pickedFile = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 75);
       if (pickedFile == null || _conversaId == null) return;
@@ -252,6 +245,7 @@ class _ChatPageState extends State<ChatPage> {
         'conversation_id': _conversaId,
         'content': finalUrl,
         'is_media': true,
+        'type': 'image', 
       });
     } catch (error) {
       _showError('Erro ao enviar imagem: $error');
@@ -299,7 +293,9 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _onMessageLongPress(Map<String, dynamic> message) async {
     final senderId = message['sender_id'] as String?;
     final isMine = senderId == meuUserId;
-    final isMedia = message['is_media'] == true;
+    final type = message['type'] ?? 'text';
+
+    if (type == 'join_request') return;
 
     if (!isMine) {
       final selected = await showModalBottomSheet<String>(context: context, builder: (_) => _EmojiPickerSheet());
@@ -313,7 +309,7 @@ class _ChatPageState extends State<ChatPage> {
 
     final createdAt = DateTime.tryParse(message['created_at'] ?? '');
     bool canEdit = false;
-    if (createdAt != null && !isMedia) {
+    if (createdAt != null && type == 'text') {
       canEdit = DateTime.now().toUtc().difference(createdAt.toUtc()).inMinutes < 15;
     }
 
@@ -332,6 +328,49 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
+  // 🟢 LÓGICA DE APROVAÇÃO/RECUSA (ATUALIZADA) 🟢
+  Future<void> _handleJoinRequest(String requestId, String userId, String messageId, bool accept) async {
+    try {
+      
+      // 1. Remove IMEDIATAMENTE o card da tela (Otimismo)
+      setState(() {
+        _deletedMessageIds.add(messageId);
+      });
+
+      // 2. Atualiza status na tabela join_requests
+      await supabase.from('join_requests').update({
+        'status': accept ? 'accepted' : 'rejected'
+      }).eq('id', requestId);
+
+      if (accept) {
+        // 3. Adiciona ao grupo
+        await supabase.from('participants').insert({
+          'conversation_id': _conversaId,
+          'user_id': userId
+        });
+        // 4. Aviso no chat (Este vai aparecer novo)
+        final profile = await ProfileCache.getProfile(userId);
+        final name = profile?['name'] ?? 'Usuário';
+        await supabase.from('messages').insert({
+           'conversation_id': _conversaId,
+           'sender_id': meuUserId,
+           'type': 'system',
+           'content': '$name entrou no grupo.',
+        });
+      }
+
+      // 5. Remove a mensagem de solicitação do banco para garantir
+      await supabase.from('messages').delete().eq('id', messageId);
+
+    } catch (e) {
+      // Se der erro, traz o card de volta
+      setState(() {
+        _deletedMessageIds.remove(messageId);
+      });
+      _showError('Erro ao processar solicitação: $e');
+    }
+  }
+
   void _showError(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
@@ -347,7 +386,7 @@ class _ChatPageState extends State<ChatPage> {
     if (!mounted) return;
     for (var m in messages) {
       final mid = m['id'] as String;
-      if (mid.startsWith('temp-')) continue; // Ignora mensagens temporárias
+      if (mid.startsWith('temp-')) continue;
       final rows = await supabase.from('reactions').select('emoji').eq('message_id', mid);
       final agg = <String, int>{};
       if (rows != null) {
@@ -398,29 +437,18 @@ class _ChatPageState extends State<ChatPage> {
             child: StreamBuilder<List<Map<String, dynamic>>>(
               stream: _messagesStream,
               builder: (context, snapshot) {
-                // 🟢 COMBINA AS LISTAS: REAIS + PENDENTES 🟢
                 var allMessages = <Map<String, dynamic>>[];
-                
-                if (snapshot.hasData) {
-                  allMessages.addAll(snapshot.data!);
-                }
+                if (snapshot.hasData) allMessages.addAll(snapshot.data!);
                 allMessages.addAll(_pendingMessages);
-
-                // Ordena por data
                 allMessages.sort((a, b) {
                   final da = DateTime.tryParse(a['created_at'].toString()) ?? DateTime.now();
                   final db = DateTime.tryParse(b['created_at'].toString()) ?? DateTime.now();
                   return da.compareTo(db);
                 });
-
-                // Filtra as apagadas
                 allMessages = allMessages.where((m) => !_deletedMessageIds.contains(m['id'])).toList();
 
-                if (allMessages.isEmpty) {
-                  return const Center(child: Text('Nenhuma mensagem ainda.'));
-                }
+                if (allMessages.isEmpty) return const Center(child: Text('Nenhuma mensagem ainda.'));
                 
-                // Atualiza reações (apenas das mensagens reais)
                 if (snapshot.hasData) _refreshReactions(snapshot.data!);
 
                 return ListView.builder(
@@ -429,11 +457,57 @@ class _ChatPageState extends State<ChatPage> {
                   itemBuilder: (context, index) {
                     final message = allMessages[index];
                     final senderId = message['sender_id'] as String?;
-                    final isMine = senderId == meuUserIdLocal;
-                    final isMedia = (message['is_media'] ?? false) == true;
+                    final type = message['type'] ?? 'text';
                     final content = message['content'] ?? '';
+                    
+                    if (type == 'system') {
+                       return Center(child: Container(margin: const EdgeInsets.symmetric(vertical: 8), padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4), decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10)), child: Text(content, style: const TextStyle(fontSize: 12, color: Colors.white60))));
+                    }
+
+                    if (type == 'join_request') {
+                      return FutureBuilder<Map<String, dynamic>?>(
+                        future: _getSenderProfileCached(senderId ?? ''),
+                        builder: (context, snap) {
+                          final name = snap.data?['name'] ?? 'Alguém';
+                          final requestId = content;
+                          
+                          return Card(
+                            margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                            color: Colors.blueGrey.shade900,
+                            child: Padding(
+                              padding: const EdgeInsets.all(12.0),
+                              child: Column(
+                                children: [
+                                  Text('$name pede para entrar neste grupo.', style: const TextStyle(fontWeight: FontWeight.bold)),
+                                  const SizedBox(height: 10),
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                    children: [
+                                      ElevatedButton(
+                                        // 🟢 PASSA O ID DA MENSAGEM TAMBÉM
+                                        onPressed: () => _handleJoinRequest(requestId, senderId!, message['id'], false),
+                                        style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                                        child: const Text('Recusar'),
+                                      ),
+                                      ElevatedButton(
+                                        // 🟢 PASSA O ID DA MENSAGEM TAMBÉM
+                                        onPressed: () => _handleJoinRequest(requestId, senderId!, message['id'], true),
+                                        style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                                        child: const Text('Aceitar'),
+                                      ),
+                                    ],
+                                  )
+                                ],
+                              ),
+                            ),
+                          );
+                        }
+                      );
+                    }
+
+                    final isMine = senderId == meuUserIdLocal;
+                    final isMedia = (message['is_media'] ?? false) == true || type == 'image';
                     final isEdited = (message['is_edited'] ?? false) == true;
-                    // 🟢 Efeito visual de "enviando"
                     final isSending = message['status'] == 'sending';
 
                     return FutureBuilder<Map<String, dynamic>?>(
@@ -445,7 +519,6 @@ class _ChatPageState extends State<ChatPage> {
                         return Padding(
                           padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
                           child: Opacity(
-                            // Deixa a mensagem meio transparente enquanto envia
                             opacity: isSending ? 0.5 : 1.0,
                             child: Row(
                               mainAxisAlignment: isMine ? MainAxisAlignment.end : MainAxisAlignment.start,

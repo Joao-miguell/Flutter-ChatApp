@@ -1,7 +1,7 @@
 // lib/pages/search_page.dart
 import 'package:flutter/material.dart';
 import 'package:chat_app/services/supabase_service.dart';
-import 'dialogs/create_group_dialog.dart'; // <--- importe o diálogo
+import 'dialogs/create_group_dialog.dart'; 
 
 class SearchPage extends StatefulWidget {
   const SearchPage({super.key});
@@ -33,12 +33,11 @@ class _SearchPageState extends State<SearchPage> {
           .ilike('name', '%$query%')
           .neq('id', meuUserId);
 
-      // 🟢 CORREÇÃO: Busca de Grupos 🟢
-      // Removi o filtro .eq('is_public', true) para que ele ache
-      // até os grupos que foram criados incorretamente como privados.
+      // Busca por grupos (Públicos E Privados)
+      // 🟢 AGORA TRAZ 'is_public' TAMBÉM
       final groups = await supabase
           .from('conversations')
-          .select('id, name, avatar_url')
+          .select('id, name, avatar_url, is_public') 
           .ilike('name', '%$query%')
           .eq('is_group', true); 
 
@@ -63,6 +62,7 @@ class _SearchPageState extends State<SearchPage> {
             'id': g['id'],
             'name': g['name'] ?? 'Grupo',
             'avatar_url': g['avatar_url'],
+            'is_public': g['is_public'], // 🟢 Guarda se é público
           });
         }
       }
@@ -82,12 +82,9 @@ class _SearchPageState extends State<SearchPage> {
     }
   }
 
-  // Lógica para iniciar conversa privada
   Future<void> _iniciarConversaComUsuario(String outroUserId) async {
     try {
       final meuUserId = supabase.auth.currentUser!.id;
-
-      // 1. Busca todas as conversas em que EU estou
       final myConversationsResponse = await supabase
           .from('participants')
           .select('conversation_id')
@@ -98,17 +95,15 @@ class _SearchPageState extends State<SearchPage> {
           .toList();
 
       if (myConversationIds.isNotEmpty) {
-        // 2. Dessas, filtra as que o OUTRO usuário está E NÃO SÃO GRUPO
         final sharedPrivateChatResponse = await supabase
             .from('participants')
-            .select('conversation_id, conversations!inner(is_group)') // Join
+            .select('conversation_id, conversations!inner(is_group)') 
             .inFilter('conversation_id', myConversationIds) 
             .eq('user_id', outroUserId) 
             .eq('conversations.is_group', false)
             .maybeSingle(); 
 
         if (sharedPrivateChatResponse != null) {
-          // 3. Encontrou chat privado, abre ele
           final conversaId = sharedPrivateChatResponse['conversation_id'] as String;
           if (mounted) {
             Navigator.of(context).popAndPushNamed('/chat', arguments: conversaId);
@@ -116,11 +111,9 @@ class _SearchPageState extends State<SearchPage> {
           return;
         }
       }
-      // 4. Não encontrou, joga exceção para criar um novo
-      throw Exception('Nenhum chat privado encontrado. Criando novo.');
       
+      throw Exception('Criando nova...');
     } catch (_) {
-      // 5. Bloco de criação
       try {
         final meuUserId = supabase.auth.currentUser!.id;
         final conversaData = await supabase.from('conversations').insert({
@@ -147,14 +140,17 @@ class _SearchPageState extends State<SearchPage> {
     }
   }
 
-  // 🟢 CORREÇÃO: Criação de Grupo 🟢
-  Future<void> _criarGrupoSimples(String name, List<String> participantIds) async {
+  // 🟢 ATUALIZADO: Recebe isPublic e salva no banco
+  Future<void> _criarGrupoSimples(String name, List<String> participantIds, bool isPublic) async {
     try {
       final meuUserId = supabase.auth.currentUser!.id;
       final data = await supabase
           .from('conversations')
-          // Agora definimos 'is_public: true' para garantir que apareça na busca futura
-          .insert({'is_group': true, 'name': name, 'is_public': true}) 
+          .insert({
+            'is_group': true, 
+            'name': name, 
+            'is_public': isPublic // 🟢 Usa o valor escolhido
+          }) 
           .select()
           .single(); 
       final groupId = data['id'] as String;
@@ -188,40 +184,113 @@ class _SearchPageState extends State<SearchPage> {
     final name = item['name'] as String? ?? '...';
     final avatar = item['avatar_url'] as String?;
     final isOnline = item['is_online'] == true;
+    
+    // 🟢 Verifica se é público (com segurança para null)
+    final isPublic = item['is_public'] == true; 
+
+    String subText;
+    if (type == 'user') {
+      subText = isOnline ? 'Online' : 'Offline';
+    } else {
+      // 🟢 Mostra status do grupo na lista
+      subText = isPublic ? 'Grupo Público' : 'Grupo Privado (Requer aprovação)';
+    }
 
     return ListTile(
       leading: CircleAvatar(
         backgroundImage: avatar != null ? NetworkImage(avatar) : null,
-        child: avatar == null ? Text(name.isNotEmpty ? name[0].toUpperCase() : "?") : null,
+        child: avatar == null ? Text(name.isNotEmpty ? name[0].toUpperCase() : '?') : null,
       ),
       title: Text(name),
-      subtitle: Text(type == 'user' ? (isOnline ? 'Online' : 'Offline') : 'Grupo público'),
+      subtitle: Text(subText),
+      // Mostra cadeado se for privado
+      trailing: (type == 'group' && !isPublic) ? const Icon(Icons.lock_outline, size: 16) : null,
       onTap: () {
         if (type == 'user') {
           _iniciarConversaComUsuario(item['id'] as String);
         } else {
-          _joinGroupAndOpen(item['id'] as String);
+          // 🟢 Passa se é público ou privado para a lógica de entrada
+          _joinGroupLogic(item['id'] as String, isPublic);
         }
       },
     );
   }
 
-  Future<void> _joinGroupAndOpen(String groupId) async {
+  // 🟢 LÓGICA DE ENTRADA 🟢
+  Future<void> _joinGroupLogic(String groupId, bool isPublic) async {
     try {
       final meuUserId = supabase.auth.currentUser!.id;
+
+      // 1. Verifica se JÁ SOU participante
       final exists = await supabase
           .from('participants')
           .select()
           .match({'conversation_id': groupId, 'user_id': meuUserId})
           .maybeSingle();
 
-      if (exists == null) {
-        await supabase.from('participants').insert({'conversation_id': groupId, 'user_id': meuUserId});
+      if (exists != null) {
+        // Já estou no grupo, só abre
+        if (mounted) Navigator.of(context).popAndPushNamed('/chat', arguments: groupId);
+        return;
       }
-      
-      if (mounted) Navigator.of(context).popAndPushNamed('/chat', arguments: groupId);
+
+      if (isPublic) {
+        // 2. Grupo PÚBLICO: Entra direto
+        await supabase.from('participants').insert({'conversation_id': groupId, 'user_id': meuUserId});
+        if (mounted) Navigator.of(context).popAndPushNamed('/chat', arguments: groupId);
+      } else {
+        // 3. Grupo PRIVADO: Manda solicitação
+        _sendJoinRequest(groupId);
+      }
+
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao entrar no grupo: $e')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
+    }
+  }
+
+  // 🟢 ENVIAR SOLICITAÇÃO 🟢
+  Future<void> _sendJoinRequest(String groupId) async {
+    try {
+      final meuUserId = supabase.auth.currentUser!.id;
+
+      // Verifica se já pediu antes
+      final existingReq = await supabase
+          .from('join_requests')
+          .select()
+          .match({'conversation_id': groupId, 'user_id': meuUserId, 'status': 'pending'})
+          .maybeSingle();
+
+      if (existingReq != null) {
+         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Já existe uma solicitação pendente.')));
+         return;
+      }
+
+      // 1. Cria a solicitação na tabela
+      final req = await supabase
+          .from('join_requests')
+          .insert({'conversation_id': groupId, 'user_id': meuUserId, 'status': 'pending'})
+          .select()
+          .single();
+      
+      final reqId = req['id'] as String;
+
+      // 2. Cria uma MENSAGEM especial no grupo avisando
+      // O 'content' guarda o ID da solicitação para facilitar a aprovação
+      await supabase.from('messages').insert({
+        'conversation_id': groupId,
+        'sender_id': meuUserId,
+        'content': reqId, // Guardamos o ID da request
+        'type': 'join_request', // Tipo especial
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Solicitação enviada! Aguarde aprovação.'), backgroundColor: Colors.blue),
+        );
+      }
+
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao solicitar: $e')));
     }
   }
 
@@ -232,7 +301,7 @@ class _SearchPageState extends State<SearchPage> {
         title: TextField(
           controller: _searchController,
           autofocus: true,
-          decoration: const InputDecoration(hintText: 'Buscar utilizadores ou grupos...', border: InputBorder.none),
+          decoration: const InputDecoration(hintText: 'Buscar usuários ou grupos...', border: InputBorder.none),
           onChanged: _searchUsers,
         ),
       ),
@@ -255,7 +324,9 @@ class _SearchPageState extends State<SearchPage> {
           if (result != null) {
             final name = result['name'] as String;
             final participants = List<String>.from(result['participants'] ?? []);
-            await _criarGrupoSimples(name, participants);
+            // 🟢 Pega a escolha do usuário
+            final isPublic = result['is_public'] == true;
+            await _criarGrupoSimples(name, participants, isPublic);
           }
         },
       ),
