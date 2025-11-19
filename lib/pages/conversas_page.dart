@@ -1,8 +1,7 @@
-// lib/pages/conversas_page.dart
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart'; // 🟢 Import necessário
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:chat_app/services/presence_service.dart';
-import 'package:chat_app/main.dart'; // Necessário para acessar o routeObserver
+import 'package:chat_app/main.dart';
 
 class ConversasPage extends StatefulWidget {
   const ConversasPage({super.key});
@@ -12,7 +11,6 @@ class ConversasPage extends StatefulWidget {
 }
 
 class _ConversasPageState extends State<ConversasPage> with RouteAware {
-  // 🟢 CORREÇÃO: Definimos o cliente Supabase aqui para evitar erros de importação
   final supabase = Supabase.instance.client;
 
   List<Map<String, dynamic>> _conversas = [];
@@ -25,10 +23,8 @@ class _ConversasPageState extends State<ConversasPage> with RouteAware {
   void initState() {
     super.initState();
     
-    // Carrega conversas ao iniciar
     _carregarConversas();
 
-    // Configura presença (online/digitando)
     _presenceStream = PresenceService.presenceStream();
     _presenceStream.listen((rows) {
       final map = <String, Map<String, dynamic>>{};
@@ -47,37 +43,31 @@ class _ConversasPageState extends State<ConversasPage> with RouteAware {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // Se inscreve para ouvir mudanças de rota (quando volta para esta tela)
     routeObserver.subscribe(this, ModalRoute.of(context)!);
   }
 
   @override
   void dispose() {
-    // Remove inscrição
     routeObserver.unsubscribe(this);
     super.dispose();
   }
 
-  // Chamado quando voltamos para esta tela (ex: saindo do Chat)
   @override
   void didPopNext() {
-    _carregarConversas(); // Força a atualização da lista
+    _carregarConversas();
   }
 
-  // Busca manual no banco
   Future<void> _carregarConversas() async {
     try {
       final userId = supabase.auth.currentUser?.id;
       if (userId == null) return;
       
-      // Faz o select na View
       final data = await supabase
           .from('v_user_conversations')
           .select()
           .eq('participant_id', userId)
           .order('last_message_at', ascending: false);
 
-      // Lógica de De-Duplicação
       final seenIds = <String>{};
       final uniqueConversas = (data as List<dynamic>).map((e) => e as Map<String, dynamic>).where((c) {
         final id = c['conversation_id'] as String?;
@@ -137,7 +127,6 @@ class _ConversasPageState extends State<ConversasPage> with RouteAware {
                       final avatar = c['display_avatar'] as String?;
                       final lastMsg = c['last_message'] ?? "";
                       
-                      // Verifica presença para mostrar "digitando..."
                       final typingUsers = c['typing_users'] ?? '';
                       final subtitle = (typingUsers != null && (typingUsers as String).isNotEmpty)
                           ? "digitando..."

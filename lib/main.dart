@@ -1,8 +1,6 @@
-// lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-// PÁGINAS
 import 'pages/splash_page.dart';
 import 'pages/login_page.dart';
 import 'pages/register_page.dart';
@@ -11,7 +9,6 @@ import 'pages/chat_page.dart';
 import 'pages/search_page.dart';
 import 'pages/profile_page.dart';
 
-// SERVIÇOS
 import 'services/presence_service.dart';
 
 Future<void> main() async {
@@ -28,7 +25,6 @@ Future<void> main() async {
 
 final supabase = Supabase.instance.client;
 
-// 🟢 1. CRIAMOS O OBSERVADOR GLOBAL
 final RouteObserver<ModalRoute<void>> routeObserver = RouteObserver<ModalRoute<void>>();
 
 class MyApp extends StatefulWidget {
@@ -93,7 +89,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           border: OutlineInputBorder(),
         ),
       ),
-      // 🟢 2. REGISTRAMOS O OBSERVADOR AQUI
       navigatorObservers: [routeObserver], 
       initialRoute: '/',
       routes: {

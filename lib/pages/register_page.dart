@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:chat_app/main.dart'; // Importa o 'supabase' global
+import 'package:chat_app/main.dart';
 
 class RegisterPage extends StatefulWidget {
   const RegisterPage({super.key});
@@ -12,14 +12,12 @@ class RegisterPage extends StatefulWidget {
 class _RegisterPageState extends State<RegisterPage> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  // ATUALIZADO: Corresponde à coluna 'name' do seu SQL
   final _nameController = TextEditingController(); 
   bool _isLoading = false;
 
   Future<void> _signUp() async {
     setState(() { _isLoading = true; });
 
-    // ATUALIZADO: 'name' em vez de 'username'
     final name = _nameController.text.trim();
     final email = _emailController.text.trim();
     final password = _passwordController.text.trim();
@@ -36,7 +34,6 @@ class _RegisterPageState extends State<RegisterPage> {
     }
 
     try {
-      // 1. Tenta criar o utilizador no 'auth'
       final AuthResponse res = await supabase.auth.signUp(
         email: email,
         password: password,
@@ -46,11 +43,9 @@ class _RegisterPageState extends State<RegisterPage> {
         throw('Registo falhou: utilizador nulo');
       }
 
-      // 2. ATUALIZADO: Insere os dados na tabela 'profiles'
-      // Isto agora funciona graças à sua RLS "Profiles insert own"
       await supabase.from('profiles').insert({
         'id': res.user!.id,
-        'name': name, // ATUALIZADO: Usando a coluna 'name'
+        'name': name,
       });
 
       if (mounted) {
@@ -70,7 +65,6 @@ class _RegisterPageState extends State<RegisterPage> {
       }
     } catch (error) {
       if (mounted) {
-        // Mostra o erro específico da RLS (se houver)
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text('Erro ao criar perfil: $error'),
           backgroundColor: Colors.red,
@@ -84,7 +78,7 @@ class _RegisterPageState extends State<RegisterPage> {
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
-    _nameController.dispose(); // ATUALIZADO
+    _nameController.dispose();
     super.dispose();
   }
 
@@ -97,7 +91,7 @@ class _RegisterPageState extends State<RegisterPage> {
         child: ListView(
           children: [
              TextFormField(
-              controller: _nameController, // ATUALIZADO
+              controller: _nameController,
               decoration: const InputDecoration(labelText: 'Nome de Utilizador'),
             ),
             const SizedBox(height: 16),
@@ -120,7 +114,7 @@ class _RegisterPageState extends State<RegisterPage> {
             const SizedBox(height: 16),
             TextButton(
               onPressed: () {
-                Navigator.of(context).pop(); // Volta para o Login
+                Navigator.of(context).pop();
               },
               child: const Text('Já tem conta? Faça login.'),
             ),

@@ -1,4 +1,3 @@
-// lib/pages/dialogs/create_group_dialog.dart
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -17,8 +16,6 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
   List<Map<String, dynamic>> _found = [];
   List<String> _selected = [];
   bool _loading = false;
-  
-  // 🟢 NOVA OPÇÃO: Define se o grupo é público
   bool _isPublic = true; 
 
   @override
@@ -65,8 +62,6 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
               onChanged: (v) => _name = v,
             ),
             const SizedBox(height: 12),
-
-            // 🟢 SWITCH PARA ESCOLHER O TIPO DE GRUPO 🟢
             SwitchListTile(
               title: const Text("Grupo Público"),
               subtitle: Text(_isPublic 
@@ -81,7 +76,6 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
               contentPadding: EdgeInsets.zero,
             ),
             const Divider(),
-            
             TextField(
               controller: _ctrl,
               decoration: const InputDecoration(
@@ -91,7 +85,6 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
               onChanged: _search,
             ),
             const SizedBox(height: 12),
-
             if (_loading)
               const Padding(
                 padding: EdgeInsets.all(12),
@@ -156,7 +149,7 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
             Navigator.of(context).pop({
               'name': _name.trim(),
               'participants': _selected,
-              'is_public': _isPublic, // 🟢 Retorna a escolha do usuário
+              'is_public': _isPublic,
             });
           },
           child: const Text('Criar'),

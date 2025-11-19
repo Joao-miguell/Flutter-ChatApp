@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:chat_app/main.dart'; // Importa o 'supabase' global
+import 'package:chat_app/main.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -17,19 +17,16 @@ class _LoginPageState extends State<LoginPage> {
   Future<void> _signIn() async {
     setState(() { _isLoading = true; });
     try {
-      // Tenta fazer o login com e-mail e senha
       await supabase.auth.signInWithPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text.trim(),
       );
 
       if (mounted) {
-        // Se o login for bem-sucedido, vai para a Home
         Navigator.of(context).pushReplacementNamed('/home');
       }
 
     } on AuthException catch (error) {
-      // Se falhar, mostra um alerta
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(error.message),
@@ -37,7 +34,6 @@ class _LoginPageState extends State<LoginPage> {
         ));
       }
     } catch (error) {
-      // Erro genérico
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Ocorreu um erro inesperado.'),

@@ -1,4 +1,3 @@
-// lib/pages/chat_page.dart
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -488,7 +487,6 @@ class _ChatPageState extends State<ChatPage> {
                 _enviarArquivoLeve();
               }
             },
-            // 🟢 CORREÇÃO: Usando a propriedade 'child' com um Row para incluir o ícone
             itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
               PopupMenuItem<String>(
                 value: 'image',
@@ -556,7 +554,7 @@ class _ChatPageState extends State<ChatPage> {
                     final content = message['content'] ?? '';
                     
                     if (type == 'system') {
-                       return Center(child: Container(margin: const EdgeInsets.symmetric(vertical: 8), padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4), decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10)), child: Text(content, style: const TextStyle(fontSize: 12, color: Colors.white60))));
+                        return Center(child: Container(margin: const EdgeInsets.symmetric(vertical: 8), padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4), decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10)), child: Text(content, style: const TextStyle(fontSize: 12, color: Colors.white60))));
                     }
 
                     if (type == 'join_request') {
