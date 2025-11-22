@@ -8,14 +8,15 @@ import 'package:http/http.dart' as http;
 import 'package:chat_app/services/supabase_service.dart';
 import 'package:chat_app/services/presence_service.dart';
 import 'package:chat_app/services/typing_service.dart';
+import 'package:chat_app/pages/call_page.dart';
 import 'package:chat_app/services/reaction_service.dart';
 import 'package:chat_app/services/profile_cache.dart';
 
-// Pacotes de Áudio e Permissões
+// Pacotes de Áudio
 import 'package:record/record.dart';
 import 'package:audioplayers/audioplayers.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class ChatPage extends StatefulWidget {
   const ChatPage({super.key});
@@ -29,7 +30,9 @@ class _ChatPageState extends State<ChatPage> {
   Stream<List<Map<String, dynamic>>>? _messagesStream;
   final _messageController = TextEditingController();
   final _picker = ImagePicker();
+  final ScrollController _scrollController = ScrollController();
   
+  // Áudio
   late final AudioRecorder _audioRecorder;
   final AudioPlayer _audioPlayer = AudioPlayer();
   bool _isRecording = false;
@@ -41,9 +44,7 @@ class _ChatPageState extends State<ChatPage> {
   StreamSubscription? _presenceSubscription;
   final Map<String, String> _typingUsers = {}; 
   bool _isGroup = false;
-  bool _isLoadingInfo = true;
   String _chatTitle = 'Carregando...';
-
   String? _editingMessageId; 
   bool get _isEditing => _editingMessageId != null;
 
@@ -55,7 +56,7 @@ class _ChatPageState extends State<ChatPage> {
   void initState() {
     super.initState();
     _audioRecorder = AudioRecorder();
-    _audioPlayer.onPlayerComplete.listen((event) {
+    _audioPlayer.onPlayerComplete.listen((_) {
       if (mounted) setState(() => _playingMessageId = null);
     });
   }
@@ -90,12 +91,26 @@ class _ChatPageState extends State<ChatPage> {
     _messageController.dispose();
     _audioRecorder.dispose();
     _audioPlayer.dispose();
+    _scrollController.dispose();
     _presenceSubscription?.cancel();
     if (meuUserId != null) PresenceService.setTyping(meuUserId!, null);
     super.dispose();
   }
 
-  // --- LÓGICA DE ÁUDIO ---
+  // --- UTILITÁRIOS DE DATA ---
+  bool _isSameDay(DateTime? d1, DateTime? d2) {
+    if (d1 == null || d2 == null) return false;
+    return d1.year == d2.year && d1.month == d2.month && d1.day == d2.day;
+  }
+
+  String _formatDateHeader(DateTime date) {
+    final now = DateTime.now();
+    if (_isSameDay(now, date)) return "Hoje";
+    if (_isSameDay(now.subtract(const Duration(days: 1)), date)) return "Ontem";
+    return "${date.day.toString().padLeft(2,'0')}/${date.month.toString().padLeft(2,'0')}/${date.year}";
+  }
+
+  // --- ÁUDIO ---
   Future<void> _startRecording() async {
     try {
       if (await _audioRecorder.hasPermission()) {
@@ -103,11 +118,9 @@ class _ChatPageState extends State<ChatPage> {
         final path = '${tempDir.path}/audio_${DateTime.now().millisecondsSinceEpoch}.m4a';
         await _audioRecorder.start(const RecordConfig(), path: path);
         setState(() => _isRecording = true);
-      } else {
-        _showError("Permissão de microfone negada.");
       }
     } catch (e) {
-      _showError("Erro ao iniciar gravação: $e");
+      debugPrint('Erro gravação: $e');
     }
   }
 
@@ -118,31 +131,28 @@ class _ChatPageState extends State<ChatPage> {
       if (path != null) {
         final file = File(path);
         final bytes = await file.readAsBytes();
-        await _uploadAndSendMedia('audio/m4a', 'audio_message.m4a', bytes, isMedia: false, type: 'audio');
+        await _uploadAndSendMedia('audio/m4a', 'audio.m4a', bytes, isMedia: false, type: 'audio');
       }
     } catch (e) {
       setState(() => _isRecording = false);
-      _showError("Erro ao parar/enviar áudio: $e");
     }
   }
 
-  Future<void> _playAudio(String url, String messageId) async {
+  Future<void> _playAudio(String url, String msgId) async {
     try {
-      if (_playingMessageId == messageId) {
+      if (_playingMessageId == msgId) {
         await _audioPlayer.stop();
         setState(() => _playingMessageId = null);
       } else {
         await _audioPlayer.stop();
         await _audioPlayer.setSourceUrl(url);
         await _audioPlayer.resume();
-        setState(() => _playingMessageId = messageId);
+        setState(() => _playingMessageId = msgId);
       }
-    } catch (e) {
-      _showError("Erro ao reproduzir: $e");
-    }
+    } catch (_) {}
   }
-  // --- FIM LÓGICA DE ÁUDIO ---
 
+  // --- OUTRAS LÓGICAS ---
   Future<void> _loadChatDetails() async {
     if (_conversaId == null || meuUserId == null) return;
     try {
@@ -151,199 +161,269 @@ class _ChatPageState extends State<ChatPage> {
       String displayTitle = data['name'] ?? 'Chat';
 
       if (!isGroup) {
-        final otherParticipant = await supabase.from('participants').select('user_id').eq('conversation_id', _conversaId!).neq('user_id', meuUserId!).maybeSingle();
-        if (otherParticipant != null) {
-          final profile = await ProfileCache.getProfile(otherParticipant['user_id']);
-          if (profile != null) displayTitle = profile['name'] ?? 'Usuário';
+        final other = await supabase.from('participants').select('user_id').eq('conversation_id', _conversaId!).neq('user_id', meuUserId!).maybeSingle();
+        if (other != null) {
+          final p = await ProfileCache.getProfile(other['user_id']);
+          if (p != null) displayTitle = p['name'] ?? 'Usuário';
         }
       }
-      if (mounted) setState(() { _isGroup = isGroup; _chatTitle = displayTitle; _isLoadingInfo = false; });
-    } catch (e) {
-      if (mounted) setState(() => _isLoadingInfo = false);
-    }
+      if (mounted) setState(() { _isGroup = isGroup; _chatTitle = displayTitle; });
+    } catch (_) {}
   }
 
   void _listenToPresence() {
     _presenceSubscription = PresenceService.presenceStream().listen((states) {
       if (!mounted) return;
-      final newTypingUsers = <String, String>{};
-      for (final state in states) {
-        final userId = state['user_id'] as String?;
-        final typingAt = state['typing_conversation'] as String?;
-        final userName = ProfileCache.cachedProfiles[userId]?['name'] ?? 'Alguém';
-        if (userId != null && userId != meuUserId && typingAt == _conversaId) {
-          newTypingUsers[userId] = userName;
+      final newTyping = <String, String>{};
+      for (final s in states) {
+        final uid = s['user_id'] as String?;
+        final typingAt = s['typing_conversation'] as String?;
+        if (uid != null && uid != meuUserId && typingAt == _conversaId) {
+          final name = ProfileCache.cachedProfiles[uid]?['name'] ?? 'Alguém';
+          newTyping[uid] = name;
         }
       }
-      if (mounted) setState(() { _typingUsers.clear(); _typingUsers.addAll(newTypingUsers); });
+      if (mounted) setState(() { _typingUsers.clear(); _typingUsers.addAll(newTyping); });
     });
   }
 
   Future<void> _enviarMensagem() async {
-    final content = _messageController.text.trim();
-    if (content.isEmpty || _conversaId == null) return;
-    final id = supabase.auth.currentUser!.id;
-
+    final txt = _messageController.text.trim();
+    if (txt.isEmpty || _conversaId == null) return;
+    
     if (_isEditing) {
-      try {
-        await supabase.from('messages').update({'content': content, 'is_edited': true}).eq('id', _editingMessageId!);
-        setState(() { _editingMessageId = null; _messageController.clear(); });
-      } catch (e) { _showError('Erro ao editar: $e'); }
+      await supabase.from('messages').update({'content': txt, 'is_edited': true}).eq('id', _editingMessageId!);
+      setState(() { _editingMessageId = null; _messageController.clear(); });
     } else {
       _messageController.clear();
-      try {
-        await supabase.from('messages').insert({
-          'sender_id': id, 'conversation_id': _conversaId, 'content': content, 'type': 'text'
-        });
-        TypingService.stopTypingNow(userId: id);
-      } catch (error) { _showError('Erro ao enviar: $error'); }
+      await supabase.from('messages').insert({
+        'sender_id': meuUserId, 'conversation_id': _conversaId, 'content': txt, 'type': 'text'
+      });
+      TypingService.stopTypingNow(userId: meuUserId!);
+      // Rola para o fim após enviar
+      Future.delayed(const Duration(milliseconds: 100), () {
+        if(_scrollController.hasClients) _scrollController.animateTo(_scrollController.position.maxScrollExtent, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+      });
     }
   }
 
-  Future<void> _uploadAndSendMedia(String mimeType, String fileName, List<int> fileBytes, {bool isMedia = false, String type = 'file'}) async {
+  Future<void> _uploadAndSendMedia(String mime, String name, List<int> bytes, {bool isMedia = false, String type = 'file'}) async {
     try {
-      final bucketName = type == 'audio' ? 'audio_messages' : 'chat_media';
+      final bucket = type == 'audio' ? 'audio_messages' : 'chat_media';
       final res = await http.post(
         Uri.parse('https://ebuybhhxytldczejyxey.supabase.co/functions/v1/get-signed-upload'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'filename': '${DateTime.now().millisecondsSinceEpoch}_$fileName', 'mime': mimeType, 'folder': bucketName}),
+        body: jsonEncode({'filename': '${DateTime.now().millisecondsSinceEpoch}_$name', 'mime': mime, 'folder': bucket}),
       );
-      if (res.statusCode != 200) throw 'Erro upload.';
-      final data = jsonDecode(res.body);
-      await http.put(Uri.parse(data['uploadUrl']), headers: {'Content-Type': mimeType}, body: fileBytes);
-      final finalUrl = 'https://ebuybhhxytldczejyxey.supabase.co/storage/v1/object/public/$bucketName/${data['key']}';
-      await supabase.from('messages').insert({'sender_id': meuUserId, 'conversation_id': _conversaId, 'content': finalUrl, 'is_media': isMedia, 'type': type, 'file_name': fileName});
-    } catch (error) { _showError('Erro no upload: $error'); }
+      if (res.statusCode != 200) throw 'Erro URL';
+      final d = jsonDecode(res.body);
+      await http.put(Uri.parse(d['uploadUrl']), headers: {'Content-Type': mime}, body: bytes);
+      final url = 'https://ebuybhhxytldczejyxey.supabase.co/storage/v1/object/public/$bucket/${d['key']}';
+      
+      await supabase.from('messages').insert({
+        'sender_id': meuUserId, 'conversation_id': _conversaId, 'content': url, 'type': type, 'is_media': isMedia, 'file_name': name
+      });
+    } catch (e) { ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro upload: $e'))); }
   }
 
   Future<void> _enviarImagem() async {
-    final pickedFile = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 70);
-    if (pickedFile != null) {
-      final bytes = await pickedFile.readAsBytes();
-      await _uploadAndSendMedia('image/jpeg', pickedFile.name, bytes, isMedia: true, type: 'image');
+    final p = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 70);
+    if (p != null) {
+      final b = await p.readAsBytes();
+      await _uploadAndSendMedia('image/jpeg', p.name, b, isMedia: true, type: 'image');
     }
   }
 
-  Future<void> _enviarArquivoLeve() async {
-    final result = await FilePicker.platform.pickFiles();
-    if (result != null && result.files.single.bytes != null) {
-      if (result.files.single.size > 20 * 1024 * 1024) { _showError('Arquivo muito grande.'); return; }
-      await _uploadAndSendMedia('application/octet-stream', result.files.single.name, result.files.single.bytes!, isMedia: false, type: 'file');
+  Future<void> _enviarArquivo() async {
+    final r = await FilePicker.platform.pickFiles();
+    if (r != null && r.files.single.bytes != null) {
+      await _uploadAndSendMedia('application/octet-stream', r.files.single.name, r.files.single.bytes!, type: 'file');
     }
   }
 
-  void _startEditing(Map<String, dynamic> message) {
-    setState(() { _editingMessageId = message['id']; _messageController.text = message['content'] ?? ''; });
+  void _onMessageLongPress(Map<String, dynamic> m) async {
+    if (m['sender_id'] == meuUserId) {
+        showModalBottomSheet(context: context, builder: (c) => Column(mainAxisSize: MainAxisSize.min, children: [
+          if (m['type'] == 'text') ListTile(leading: const Icon(Icons.edit), title: const Text('Editar'), onTap: (){ Navigator.pop(c); setState(() { _editingMessageId = m['id']; _messageController.text = m['content']; }); }),
+          ListTile(leading: const Icon(Icons.delete, color: Colors.red), title: const Text('Apagar'), onTap: (){ Navigator.pop(c); supabase.from('messages').delete().eq('id', m['id']); }),
+        ]));
+    }
   }
 
-  void _showError(String msg) {
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
+  void _onTextChanged(String val) {
+    if (_conversaId != null) TypingService.notifyTyping(conversationId: _conversaId!, userId: meuUserId!);
+    setState(() {});
+  }
+
+  // Visualizador de Imagem em Tela Cheia
+  void _openFullScreenImage(String url) {
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(backgroundColor: Colors.black, iconTheme: const IconThemeData(color: Colors.white)),
+      body: Center(child: InteractiveViewer(child: Image.network(url))),
+    )));
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_messagesStream == null || _isLoadingInfo) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    if (_messagesStream == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
 
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 0,
         leadingWidth: 30,
-        leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.of(context).pop()),
-        title: Row(children: [
-          const CircleAvatar(backgroundColor: Colors.grey, child: Icon(Icons.person, color: Colors.white, size: 20)),
-          const SizedBox(width: 10),
-          Expanded(child: Text(_chatTitle, style: const TextStyle(fontSize: 16))),
-        ]),
-        actions: [IconButton(icon: const Icon(Icons.more_vert), onPressed: (){})],
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back), 
+          onPressed: () => Navigator.of(context).pop()
+        ),
+        title: Row(
+          children: [
+            const CircleAvatar(child: Icon(Icons.person)),
+            const SizedBox(width: 10),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start, 
+              children: [
+                Text(_chatTitle, style: const TextStyle(fontSize: 16)),
+                StreamBuilder(
+                  stream: PresenceService.presenceStream(),
+                  builder: (ctx, snap) {
+                    String sub = '';
+                    if (snap.hasData && !_isGroup) {
+                      final isOnline = snap.data!.any((u) => u['user_id'] != meuUserId && (u['is_online'] ?? false));
+                      if (isOnline) sub = 'Online';
+                    }
+                    if (_typingUsers.isNotEmpty && !_isGroup) sub = 'digitando...';
+                    return Text(sub, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.normal));
+                  }
+                )
+              ]
+            ),
+          ],
+        ),
+        actions: [
+          // BOTÃO DE VÍDEO
+          IconButton(
+            icon: const Icon(Icons.videocam), 
+            onPressed: () {
+              Navigator.push(context, MaterialPageRoute(
+                builder: (_) => CallPage(
+                  callID: _conversaId!, // O ID da conversa é a "sala" da chamada
+                  userID: meuUserId!,
+                  userName: 'Eu', // Idealmente pegaria o nome do usuário
+                  isVideo: true,
+                )
+              ));
+            }
+          ),
+          // BOTÃO DE VOZ
+          IconButton(
+            icon: const Icon(Icons.call), 
+            onPressed: () {
+              Navigator.push(context, MaterialPageRoute(
+                builder: (_) => CallPage(
+                  callID: _conversaId!,
+                  userID: meuUserId!,
+                  userName: 'Eu',
+                  isVideo: false, // Apenas áudio
+                )
+              ));
+            }
+          ),
+          PopupMenuButton(itemBuilder: (context) => [const PopupMenuItem(child: Text('Dados do grupo'))]),
+        ],
       ),
       body: Container(
-        // IMAGEM DE FUNDO AQUI
-        decoration: const BoxDecoration(
-          image: DecorationImage(
-            image: AssetImage('assets/images/background.jpg'), 
-            fit: BoxFit.cover,
-          ),
-        ),
+        decoration: const BoxDecoration(image: DecorationImage(image: AssetImage('assets/images/background.jpg'), fit: BoxFit.cover)),
         child: Column(
           children: [
             Expanded(
               child: StreamBuilder<List<Map<String, dynamic>>>(
                 stream: _messagesStream,
                 builder: (context, snapshot) {
-                  var messages = snapshot.data ?? [];
-                  messages.addAll(_pendingMessages);
-                  messages.sort((a, b) => (a['created_at']??'').compareTo(b['created_at']??''));
-                  
-                  return ListView.builder(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    itemCount: messages.length,
-                    itemBuilder: (context, index) {
-                      final m = messages[index];
-                      if (_deletedMessageIds.contains(m['id'])) return const SizedBox.shrink();
+                  final msgs = snapshot.data ?? [];
+                  msgs.addAll(_pendingMessages);
+                  msgs.sort((a, b) => (a['created_at']??'').compareTo(b['created_at']??''));
 
+                  // Filtrar apagadas
+                  final visibleMsgs = msgs.where((m) => !_deletedMessageIds.contains(m['id']) && !(m['type'] == 'join_request' && _handledRequestIds.contains(m['content']))).toList();
+
+                  return ListView.builder(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    itemCount: visibleMsgs.length,
+                    itemBuilder: (ctx, i) {
+                      final m = visibleMsgs[i];
                       final isMine = m['sender_id'] == meuUserId;
-                      final content = m['content'] ?? '';
-                      final type = m['type'] ?? 'text';
+                      final type = m['type'];
+                      final content = m['content'];
                       final time = DateTime.tryParse(m['created_at'].toString());
                       final timeStr = time != null ? "${time.hour.toString().padLeft(2,'0')}:${time.minute.toString().padLeft(2,'0')}" : "";
 
-                      // Correção Visual do Balão
-                      return Align(
-                        alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
-                        child: ConstrainedBox(
-                          constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.80),
-                          child: Card(
-                            elevation: 1,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.only(
-                                topLeft: const Radius.circular(10),
-                                topRight: const Radius.circular(10),
-                                bottomLeft: isMine ? const Radius.circular(10) : Radius.zero,
-                                bottomRight: isMine ? Radius.zero : const Radius.circular(10),
-                              )
-                            ),
-                            // Cores dos balões (Verde enviado, Cinza recebido)
-                            color: isMine ? const Color(0xFF005C4B) : const Color(0xFF1F2C34),
-                            margin: const EdgeInsets.symmetric(vertical: 4),
-                            child: Padding(
-                              padding: const EdgeInsets.only(left: 8, right: 8, top: 6, bottom: 4),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  if (type == 'image') 
-                                    Padding(padding: const EdgeInsets.only(bottom: 4), child: ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.network(content)))
-                                  else if (type == 'audio')
-                                    Row(mainAxisSize: MainAxisSize.min, children: [
-                                      IconButton(icon: Icon(_playingMessageId == m['id'] ? Icons.pause : Icons.play_arrow), onPressed: () => _playAudio(content, m['id'])),
-                                      const Text("Áudio", style: TextStyle(color: Colors.white70))
-                                    ])
-                                  else 
-                                    Padding(
-                                      padding: const EdgeInsets.only(right: 10, bottom: 0), 
-                                      child: Text(content, style: const TextStyle(fontSize: 16, color: Colors.white)),
-                                    ),
+                      // Lógica do Separador de Data
+                      bool showDate = false;
+                      if (i == 0) {
+                        showDate = true;
+                      } else {
+                        final prevTime = DateTime.tryParse(visibleMsgs[i - 1]['created_at'].toString());
+                        showDate = !_isSameDay(time, prevTime);
+                      }
 
-                                  // Hora e Check (Alinhado à direita)
-                                  Align(
-                                    alignment: Alignment.bottomRight,
-                                    widthFactor: 1.0,
-                                    child: Row(
+                      return Column(
+                        children: [
+                          if (showDate && time != null)
+                            Container(
+                              margin: const EdgeInsets.symmetric(vertical: 12),
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                              decoration: BoxDecoration(color: const Color(0xFF1C262D).withOpacity(0.9), borderRadius: BorderRadius.circular(8)),
+                              child: Text(_formatDateHeader(time), style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)),
+                            ),
+
+                          Align(
+                            alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
+                            child: ConstrainedBox(
+                              constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
+                              child: GestureDetector(
+                                onLongPress: () => _onMessageLongPress(m),
+                                child: Card(
+                                  color: isMine ? const Color(0xFF005C4B) : const Color(0xFF1F2C34),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.only(topLeft: const Radius.circular(10), topRight: const Radius.circular(10), bottomLeft: isMine ? const Radius.circular(10) : Radius.zero, bottomRight: isMine ? Radius.zero : const Radius.circular(10))),
+                                  margin: const EdgeInsets.symmetric(vertical: 4),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(8),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
-                                        Text(timeStr, style: const TextStyle(fontSize: 11, color: Colors.white60)),
-                                        if (isMine) ...[
-                                          const SizedBox(width: 4),
-                                          const Icon(Icons.done_all, size: 15, color: Colors.blue),
-                                        ]
+                                        if (type == 'image') 
+                                          GestureDetector(
+                                            onTap: () => _openFullScreenImage(content),
+                                            child: ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.network(content)),
+                                          )
+                                        else if (type == 'audio') 
+                                          Row(mainAxisSize: MainAxisSize.min, children: [
+                                            IconButton(icon: Icon(_playingMessageId == m['id'] ? Icons.pause : Icons.play_arrow), onPressed: () => _playAudio(content, m['id'])),
+                                            const Text("Áudio", style: TextStyle(color: Colors.white))
+                                          ])
+                                        else if (type == 'file')
+                                          Row(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.file_present), Flexible(child: Text(m['file_name'] ?? 'Arquivo', style: const TextStyle(color: Colors.white)))])
+                                        else
+                                          Padding(
+                                            padding: const EdgeInsets.only(right: 10, bottom: 0),
+                                            child: Text(content, style: const TextStyle(fontSize: 16, color: Colors.white)),
+                                          ),
+                                        
+                                        Align(alignment: Alignment.bottomRight, widthFactor: 1, child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                          Text(timeStr, style: const TextStyle(fontSize: 11, color: Colors.white54)),
+                                          if(isMine) ...[const SizedBox(width:4), const Icon(Icons.done_all, size:15, color: Colors.blue)]
+                                        ])),
                                       ],
                                     ),
                                   ),
-                                ],
+                                ),
                               ),
                             ),
                           ),
-                        ),
+                        ],
                       );
                     },
                   );
@@ -353,9 +433,8 @@ class _ChatPageState extends State<ChatPage> {
             // BARRA DE INPUT
             Align(
               alignment: Alignment.bottomCenter,
-              child: Container(
-                padding: const EdgeInsets.all(6),
-                // Remover cor de fundo para o papel de parede aparecer atrás
+              child: Padding(
+                padding: const EdgeInsets.all(8.0),
                 child: Row(children: [
                   Expanded(
                     child: Container(
@@ -363,30 +442,38 @@ class _ChatPageState extends State<ChatPage> {
                       child: Row(children: [
                         IconButton(icon: const Icon(Icons.emoji_emotions_outlined, color: Colors.grey), onPressed: (){}),
                         Expanded(
-                          child: TextField(
-                            controller: _messageController,
-                            style: const TextStyle(color: Colors.white),
-                            decoration: const InputDecoration(hintText: 'Mensagem', border: InputBorder.none, contentPadding: EdgeInsets.symmetric(horizontal: 10)),
-                            minLines: 1, maxLines: 5,
-                            onChanged: (t) => setState((){}),
-                          ),
+                          child: _isRecording 
+                            ? const Padding(padding: EdgeInsets.only(left: 10), child: Text("Gravando... Solte para enviar", style: TextStyle(color: Colors.red)))
+                            : TextField(
+                                controller: _messageController,
+                                style: const TextStyle(color: Colors.white),
+                                decoration: const InputDecoration(hintText: "Mensagem", border: InputBorder.none),
+                                onChanged: _onTextChanged,
+                                onSubmitted: (_) => _enviarMensagem(),
+                              ),
                         ),
                         IconButton(icon: const Icon(Icons.attach_file, color: Colors.grey), onPressed: (){
                            showModalBottomSheet(context: context, builder: (c) => Container(height: 100, color: const Color(0xFF1F2C34), child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                               IconButton(icon: const Icon(Icons.image, color: Colors.purple, size: 40), onPressed: (){ Navigator.pop(c); _enviarImagem(); }),
                               const SizedBox(width: 30),
-                              IconButton(icon: const Icon(Icons.insert_drive_file, color: Colors.indigo, size: 40), onPressed: (){ Navigator.pop(c); _enviarArquivoLeve(); }),
+                              IconButton(icon: const Icon(Icons.insert_drive_file, color: Colors.indigo, size: 40), onPressed: (){ Navigator.pop(c); _enviarArquivo(); }),
                            ])));
                         }),
-                        if (_messageController.text.isEmpty) IconButton(icon: const Icon(Icons.camera_alt, color: Colors.grey), onPressed: _enviarImagem),
+                        if (!_isRecording && _messageController.text.isEmpty)
+                           IconButton(icon: const Icon(Icons.camera_alt, color: Colors.grey), onPressed: _enviarImagem),
                       ]),
                     ),
                   ),
-                  const SizedBox(width: 6),
+                  const SizedBox(width: 5),
                   GestureDetector(
-                    onLongPress: _startRecording, onLongPressUp: _stopRecordingAndSend,
-                    child: CircleAvatar(radius: 24, backgroundColor: const Color(0xFF00A884), child: Icon(_isRecording ? Icons.stop : (_messageController.text.isEmpty ? Icons.mic : Icons.send), color: Colors.white)),
-                    onTap: () { if (_messageController.text.isNotEmpty) _enviarMensagem(); },
+                    onLongPress: _startRecording,
+                    onLongPressUp: _stopRecordingAndSend,
+                    onTap: () { if(_messageController.text.isNotEmpty) _enviarMensagem(); },
+                    child: CircleAvatar(
+                      radius: 24,
+                      backgroundColor: const Color(0xFF00A884),
+                      child: Icon(_isRecording ? Icons.stop : (_messageController.text.isEmpty ? Icons.mic : Icons.send), color: Colors.white),
+                    ),
                   )
                 ]),
               ),
@@ -395,13 +482,5 @@ class _ChatPageState extends State<ChatPage> {
         ),
       ),
     );
-  }
-}
-
-class _EmojiPickerSheet extends StatelessWidget {
-  final List<String> emojis = ['👍', '❤️', '😂', '😮', '😢', '👏', '🔥'];
-  @override
-  Widget build(BuildContext context) {
-    return Container(padding: const EdgeInsets.all(16), height: 100, child: ListView.separated(scrollDirection: Axis.horizontal, itemCount: emojis.length, separatorBuilder: (_,__)=>const SizedBox(width: 20), itemBuilder: (c, i) => GestureDetector(onTap: ()=>Navigator.pop(c, emojis[i]), child: Text(emojis[i], style: const TextStyle(fontSize: 30)))));
   }
 }
