@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-// import 'dart:io'; // REMOVIDO: Não funciona na Web
-import 'package:flutter/foundation.dart' show kIsWeb; // Para verificar se é Web
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
@@ -51,7 +50,11 @@ class _ChatPageState extends State<ChatPage> {
   StreamSubscription? _presenceSubscription;
   final Map<String, String> _typingUsers = {}; 
   bool _isGroup = false;
+  
+  // VARIÁVEIS DE CABEÇALHO (CORRIGIDAS)
   String _chatTitle = 'Carregando...';
+  String? _chatAvatar; // <--- AQUI VAI A FOTO DO USUÁRIO
+
   String? _editingMessageId; 
   bool get _isEditing => _editingMessageId != null;
 
@@ -113,7 +116,7 @@ class _ChatPageState extends State<ChatPage> {
     super.dispose();
   }
 
-  // --- UTILITÁRIOS DE DATA ---
+  // --- UTILITÁRIOS ---
   bool _isSameDay(DateTime? d1, DateTime? d2) {
     if (d1 == null || d2 == null) return false;
     return d1.year == d2.year && d1.month == d2.month && d1.day == d2.day;
@@ -126,10 +129,10 @@ class _ChatPageState extends State<ChatPage> {
     return "${date.day.toString().padLeft(2,'0')}/${date.month.toString().padLeft(2,'0')}/${date.year}";
   }
 
-  // --- ÁUDIO (Adaptado para evitar erros na Web) ---
+  // --- ÁUDIO ---
   Future<void> _startRecording() async {
     if (kIsWeb) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Gravação de áudio não suportada na versão Web ainda.")));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Gravação de áudio não suportada na versão Web.")));
       return;
     }
     try {
@@ -150,14 +153,6 @@ class _ChatPageState extends State<ChatPage> {
       final path = await _audioRecorder.stop();
       setState(() => _isRecording = false);
       if (path != null) {
-        // Na web não usamos File de dart:io, mas aqui estamos protegidos pelo if(kIsWeb)
-        // Para web real precisaríamos usar bytes diretos do stream
-        // import 'dart:io'; foi removido, então usaremos uma lógica genérica se precisar
-        // Mas como bloqueamos na web acima, o código abaixo só roda no mobile/desktop
-        // e precisa de dart:io para funcionar. 
-        // Para corrigir o erro de compilação na web sem dart:io, 
-        // não podemos usar File(path) diretamente neste arquivo híbrido de forma simples.
-        // Vamos apenas exibir erro por enquanto para focar na compilação.
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Envio de áudio disponível apenas em Mobile.")));
       }
     } catch (e) {
@@ -179,7 +174,7 @@ class _ChatPageState extends State<ChatPage> {
     } catch (_) {}
   }
 
-  // --- LÓGICA DE EMOJI ---
+  // --- EMOJI ---
   void _toggleEmojiPicker() {
     if (_showEmojiPicker) {
       _focusNode.requestFocus(); 
@@ -196,22 +191,33 @@ class _ChatPageState extends State<ChatPage> {
     _onTextChanged(_messageController.text);
   }
 
-  // --- OUTRAS LÓGICAS ---
+  // --- LÓGICA DE CARREGAMENTO (CORRIGIDA) ---
   Future<void> _loadChatDetails() async {
     if (_conversaId == null || meuUserId == null) return;
     try {
-      final data = await supabase.from('conversations').select('is_group, name').eq('id', _conversaId!).single();
+      final data = await supabase.from('conversations').select('is_group, name, avatar_url').eq('id', _conversaId!).single();
       final isGroup = data['is_group'] ?? false;
       String displayTitle = data['name'] ?? 'Chat';
+      String? displayAvatar = data['avatar_url']; // Pega avatar do grupo se houver
 
       if (!isGroup) {
         final other = await supabase.from('participants').select('user_id').eq('conversation_id', _conversaId!).neq('user_id', meuUserId!).maybeSingle();
         if (other != null) {
           final p = await ProfileCache.getProfile(other['user_id']);
-          if (p != null) displayTitle = p['name'] ?? 'Usuário';
+          if (p != null) {
+            displayTitle = p['name'] ?? 'Usuário';
+            displayAvatar = p['avatar_url']; // Pega avatar do usuário
+          }
         }
       }
-      if (mounted) setState(() { _isGroup = isGroup; _chatTitle = displayTitle; });
+      
+      if (mounted) {
+        setState(() { 
+          _isGroup = isGroup; 
+          _chatTitle = displayTitle;
+          _chatAvatar = displayAvatar; // Atualiza a variável de estado
+        });
+      }
     } catch (_) {}
   }
 
@@ -348,23 +354,40 @@ class _ChatPageState extends State<ChatPage> {
         leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.of(context).pop()),
         title: Row(
           children: [
-            const CircleAvatar(child: Icon(Icons.person)),
+            // AQUI ESTÁ A CORREÇÃO DO AVATAR:
+            CircleAvatar(
+              backgroundColor: Colors.grey,
+              backgroundImage: _chatAvatar != null ? NetworkImage(_chatAvatar!) : null,
+              child: _chatAvatar == null ? const Icon(Icons.person, color: Colors.white, size: 20) : null,
+            ),
             const SizedBox(width: 10),
-            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(_chatTitle, style: const TextStyle(fontSize: 16)),
-              StreamBuilder(
-                stream: PresenceService.presenceStream(),
-                builder: (ctx, snap) {
-                  String sub = '';
-                  if (snap.hasData && !_isGroup) {
-                    final isOnline = snap.data!.any((u) => u['user_id'] != meuUserId && (u['is_online'] ?? false));
-                    if (isOnline) sub = 'Online';
-                  }
-                  if (_typingUsers.isNotEmpty && !_isGroup) sub = 'digitando...';
-                  return Text(sub, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.normal));
-                }
-              )
-            ]),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start, 
+                children: [
+                  Text(_chatTitle, style: const TextStyle(fontSize: 16)),
+                  StreamBuilder(
+                    stream: PresenceService.presenceStream(),
+                    builder: (ctx, snap) {
+                      String text = '';
+                      Color textColor = Colors.white70; 
+                      
+                      if (snap.hasData && !_isGroup) {
+                        final isOnline = snap.data!.any((u) => u['user_id'] != meuUserId && (u['is_online'] ?? false));
+                        if (isOnline) text = 'Online';
+                      }
+                      
+                      if (_typingUsers.isNotEmpty && !_isGroup) {
+                        text = 'digitando...';
+                        textColor = accentColor; 
+                      }
+                      
+                      return Text(text, style: TextStyle(fontSize: 12, fontWeight: FontWeight.normal, color: textColor, fontStyle: text == 'digitando...' ? FontStyle.italic : FontStyle.normal));
+                    }
+                  )
+                ]
+              ),
+            ),
           ],
         ),
       ),
@@ -403,8 +426,8 @@ class _ChatPageState extends State<ChatPage> {
                       }
 
                       final bubbleColor = isMine 
-                          ? theme.colorScheme.tertiary
-                          : theme.colorScheme.surfaceContainerHighest;
+                          ? theme.colorScheme.tertiary 
+                          : theme.colorScheme.surfaceContainerHighest; 
 
                       return Column(
                         children: [
@@ -522,7 +545,7 @@ class _ChatPageState extends State<ChatPage> {
                     ]),
                   ),
                   
-                  // SELETOR DE EMOJI (Configuração v4)
+                  // SELETOR DE EMOJI
                   if (_showEmojiPicker)
                     SizedBox(
                       height: 250,
@@ -535,7 +558,7 @@ class _ChatPageState extends State<ChatPage> {
                           checkPlatformCompatibility: true,
                           emojiViewConfig: EmojiViewConfig(
                             columns: 7,
-                            emojiSizeMax: 32 * (kIsWeb ? 1.0 : 1.30), // Ajuste para Web/Mobile
+                            emojiSizeMax: 32 * (kIsWeb ? 1.0 : 1.30),
                             verticalSpacing: 0,
                             horizontalSpacing: 0,
                             gridPadding: EdgeInsets.zero,
@@ -551,7 +574,6 @@ class _ChatPageState extends State<ChatPage> {
                             iconColorSelected: accentColor,
                             backspaceColor: accentColor,
                             categoryIcons: const CategoryIcons(),
-                            // showBackspaceButton: true, <--- REMOVIDO (Causava o erro)
                           ),
                           skinToneConfig: SkinToneConfig(
                             dialogBackgroundColor: inputColor,
