@@ -40,13 +40,22 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _updatePresence(true);
+    _iniciarPresenca();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    PresenceService.stopHeartbeat(); // Para o timer ao fechar
     super.dispose();
+  }
+
+  void _iniciarPresenca() {
+    final userId = supabase.auth.currentUser?.id;
+    if (userId != null) {
+      // Inicia o batimento cardíaco (avisa a cada 45s que está online)
+      PresenceService.startHeartbeat(userId);
+    }
   }
 
   @override
@@ -56,33 +65,24 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
 
     switch (state) {
       case AppLifecycleState.resumed:
-        PresenceService.setOnline(userId);
+        // Voltou para o app: Volta a ficar online e inicia o timer
+        PresenceService.startHeartbeat(userId);
         break;
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
-      case AppLifecycleState.inactive:
-      case AppLifecycleState.hidden:
+        // Saiu do app: Para o timer e avisa que saiu
+        PresenceService.stopHeartbeat();
         PresenceService.setOffline(userId);
         break;
-    }
-  }
-
-  Future<void> _updatePresence(bool isOnline) async {
-    final userId = supabase.auth.currentUser?.id;
-    if (userId != null) {
-      if (isOnline) {
-        await PresenceService.setOnline(userId);
-      } else {
-        await PresenceService.setOffline(userId);
-      }
+      default: 
+        break;
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // --- NOVA PALETA DE CORES (ATUALIZADA) ---
     const colorBackground = Color(0xFF131314); 
-    const colorPrimary = Color(0xFF301445);    // <--- NOVA COR AQUI
+    const colorPrimary = Color(0xFF301445);    
     const colorSurface = Color(0xFF1E1E20);    
     
     return MaterialApp(
@@ -91,19 +91,16 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: colorBackground,
         primaryColor: colorPrimary,
-        
         appBarTheme: const AppBarTheme(
           backgroundColor: colorBackground,
           elevation: 0,
           titleTextStyle: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
           iconTheme: IconThemeData(color: Colors.white),
         ),
-        
         floatingActionButtonTheme: const FloatingActionButtonThemeData(
           backgroundColor: colorPrimary,
           foregroundColor: Colors.white,
         ),
-        
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
           fillColor: colorSurface,
@@ -114,7 +111,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
           hintStyle: const TextStyle(color: Colors.grey),
         ),
-        
         colorScheme: const ColorScheme.dark(
           primary: colorPrimary,
           secondary: colorPrimary, 

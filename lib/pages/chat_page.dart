@@ -1,17 +1,18 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data'; 
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
-import 'package:supabase_flutter/supabase_flutter.dart'; 
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:chat_app/services/supabase_service.dart';
 import 'package:chat_app/services/presence_service.dart';
 import 'package:chat_app/services/typing_service.dart';
 import 'package:chat_app/services/reaction_service.dart';
 import 'package:chat_app/services/profile_cache.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 // Pacotes de Áudio
 import 'package:record/record.dart';
@@ -19,8 +20,10 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-// Pacote de Emoji e Chamada
+// Pacote de Emoji
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
+
+// Página de Chamada
 import 'package:chat_app/pages/call_page.dart';
 
 class ChatPage extends StatefulWidget {
@@ -33,6 +36,8 @@ class ChatPage extends StatefulWidget {
 class _ChatPageState extends State<ChatPage> {
   String? _conversaId;
   Stream<List<Map<String, dynamic>>>? _messagesStream;
+  StreamSubscription? _msgSubscription; // <--- NOVO: Para monitorar leitura
+
   final _messageController = TextEditingController();
   final _picker = ImagePicker();
   final ScrollController _scrollController = ScrollController();
@@ -44,7 +49,6 @@ class _ChatPageState extends State<ChatPage> {
   bool _isRecording = false;
   String? _playingMessageId;
   
-  // Variável para acumular bytes do áudio na Web
   List<int> _webAudioBytes = [];
   StreamSubscription? _recordStreamSubscription;
 
@@ -94,11 +98,29 @@ class _ChatPageState extends State<ChatPage> {
     _conversaId = args as String;
     meuUserId = supabase.auth.currentUser?.id;
 
-    _messagesStream = supabase
+    // Configura o Stream e o Listener de Leitura
+    final stream = supabase
         .from('messages')
         .stream(primaryKey: ['id'])
         .eq('conversation_id', _conversaId!)
         .order('created_at', ascending: true);
+    
+    _messagesStream = stream;
+
+    // --- CORREÇÃO DA LEITURA ---
+    _msgSubscription?.cancel();
+    _msgSubscription = stream.listen((msgs) {
+      if (msgs.isNotEmpty) {
+        // Pega a mensagem mais recente recebida
+        final lastMsg = msgs.last;
+        final lastTime = lastMsg['created_at'];
+        // Marca como lido usando o horário DA MENSAGEM (infalível)
+        if (lastTime != null) {
+          _marcarComoLida(lastTime);
+        }
+      }
+    });
+    // --------------------------
 
     _loadChatDetails();
     _listenToPresence();
@@ -118,13 +140,47 @@ class _ChatPageState extends State<ChatPage> {
     _scrollController.dispose();
     _focusNode.dispose();
     _presenceSubscription?.cancel();
+    _msgSubscription?.cancel(); // <--- Importante cancelar
     if (meuUserId != null) PresenceService.setTyping(meuUserId!, null);
     super.dispose();
   }
 
-  // --- LÓGICA DE ÁUDIO CORRIGIDA (WEB + MOBILE) ---
-  
-  // Inicia gravação (Clique para começar)
+  // --- MARCAR LIDA (Agora recebe o horário certo) ---
+  Future<void> _marcarComoLida(String timestamp) async {
+    if (_conversaId == null || meuUserId == null) return;
+    try {
+      await supabase.from('participants').update({
+        'last_read_at': timestamp, 
+      }).match({
+        'conversation_id': _conversaId!,
+        'user_id': meuUserId!,
+      });
+    } catch (_) {}
+  }
+
+  // --- UTILITÁRIOS ---
+  bool _isSameDay(DateTime? d1, DateTime? d2) {
+    if (d1 == null || d2 == null) return false;
+    return d1.year == d2.year && d1.month == d2.month && d1.day == d2.day;
+  }
+
+  String _formatDateHeader(DateTime date) {
+    final now = DateTime.now();
+    if (_isSameDay(now, date)) return "Hoje";
+    if (_isSameDay(now.subtract(const Duration(days: 1)), date)) return "Ontem";
+    return "${date.day.toString().padLeft(2,'0')}/${date.month.toString().padLeft(2,'0')}/${date.year}";
+  }
+
+  Future<void> _abrirArquivo(String url) async {
+    final uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Não foi possível abrir o arquivo.")));
+    }
+  }
+
+  // --- ÁUDIO ---
   Future<void> _toggleRecording() async {
     if (_isRecording) {
       await _stopRecordingAndSend();
@@ -139,14 +195,12 @@ class _ChatPageState extends State<ChatPage> {
         setState(() => _isRecording = true);
 
         if (kIsWeb) {
-          // Lógica Web: Gravar Stream de Bytes
           _webAudioBytes = [];
-          final stream = await _audioRecorder.startStream(const RecordConfig(encoder: AudioEncoder.pcm16bit));
+          final stream = await _audioRecorder.startStream(const RecordConfig());
           _recordStreamSubscription = stream.listen((data) {
             _webAudioBytes.addAll(data);
           });
         } else {
-          // Lógica Mobile/Desktop: Gravar em Arquivo
           final tempDir = await getTemporaryDirectory();
           final path = '${tempDir.path}/audio_${DateTime.now().millisecondsSinceEpoch}.m4a';
           await _audioRecorder.start(const RecordConfig(), path: path);
@@ -161,21 +215,21 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _stopRecordingAndSend() async {
     try {
       String? path;
-      if (!kIsWeb) {
-        path = await _audioRecorder.stop();
-      } else {
-        await _audioRecorder.stop();
+      
+      if (kIsWeb) {
+        await _audioRecorder.stop(); 
         _recordStreamSubscription?.cancel();
+      } else {
+        path = await _audioRecorder.stop();
       }
       
       setState(() => _isRecording = false);
 
       List<int>? bytes;
+      
       if (kIsWeb) {
         if (_webAudioBytes.isNotEmpty) bytes = _webAudioBytes;
       } else if (path != null) {
-        // Para mobile, precisamos ler o arquivo como bytes
-        // Como removemos dart:io, usamos XFile (que é cross-platform)
         final file = XFile(path);
         bytes = await file.readAsBytes();
       }
@@ -202,9 +256,8 @@ class _ChatPageState extends State<ChatPage> {
       }
     } catch (_) {}
   }
-  // --- FIM LÓGICA ÁUDIO ---
 
-  // --- LÓGICA DE CHAMADA ---
+  // --- CHAMADA ---
   Future<void> _logCallAndStart(bool isVideo) async {
     if (meuUserId == null || _conversaId == null) return;
     try {
@@ -245,7 +298,7 @@ class _ChatPageState extends State<ChatPage> {
     _onTextChanged(_messageController.text);
   }
 
-  // --- CARREGAMENTOS ---
+  // --- LÓGICA GERAL ---
   Future<void> _loadChatDetails() async {
     if (_conversaId == null || meuUserId == null) return;
     try {
@@ -294,7 +347,6 @@ class _ChatPageState extends State<ChatPage> {
     });
   }
 
-  // --- ENVIO ---
   Future<void> _enviarMensagem() async {
     final txt = _messageController.text.trim();
     if (txt.isEmpty || _conversaId == null) return;
@@ -328,7 +380,12 @@ class _ChatPageState extends State<ChatPage> {
       final url = supabase.storage.from(bucket).getPublicUrl(fileName);
       
       await supabase.from('messages').insert({
-        'sender_id': meuUserId, 'conversation_id': _conversaId, 'content': url, 'type': type, 'is_media': isMedia, 'file_name': name
+        'sender_id': meuUserId, 
+        'conversation_id': _conversaId, 
+        'content': url, 
+        'type': type, 
+        'is_media': isMedia, 
+        'file_name': name
       });
     } catch (e) { 
       debugPrint('Erro upload: $e');
@@ -351,7 +408,6 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  // --- INTERFACE ---
   void _onMessageLongPress(Map<String, dynamic> m) async {
     if (m['sender_id'] == meuUserId) {
         showModalBottomSheet(context: context, builder: (c) => Column(mainAxisSize: MainAxisSize.min, children: [
@@ -364,18 +420,6 @@ class _ChatPageState extends State<ChatPage> {
   void _onTextChanged(String val) {
     if (_conversaId != null) TypingService.notifyTyping(conversationId: _conversaId!, userId: meuUserId!);
     setState(() {});
-  }
-
-  bool _isSameDay(DateTime? d1, DateTime? d2) {
-    if (d1 == null || d2 == null) return false;
-    return d1.year == d2.year && d1.month == d2.month && d1.day == d2.day;
-  }
-
-  String _formatDateHeader(DateTime date) {
-    final now = DateTime.now();
-    if (_isSameDay(now, date)) return "Hoje";
-    if (_isSameDay(now.subtract(const Duration(days: 1)), date)) return "Ontem";
-    return "${date.day.toString().padLeft(2,'0')}/${date.month.toString().padLeft(2,'0')}/${date.year}";
   }
 
   Widget _buildReactionsRow(String messageId) {
@@ -423,11 +467,12 @@ class _ChatPageState extends State<ChatPage> {
 
     return Scaffold(
       appBar: AppBar(
-        automaticallyImplyLeading: false, // <--- REMOVE A SETA DE VOLTAR (PEDIDO ATENDIDO)
         titleSpacing: 0,
+        leadingWidth: 30,
+        // SETA DE VOLTAR
+        leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.of(context).pop()),
         title: Row(
           children: [
-            const SizedBox(width: 16), // Espaço extra já que tiramos a seta
             CircleAvatar(
               backgroundColor: Colors.grey,
               backgroundImage: _chatAvatar != null ? NetworkImage(_chatAvatar!) : null,
@@ -445,8 +490,12 @@ class _ChatPageState extends State<ChatPage> {
                       String text = '';
                       Color textColor = Colors.white70; 
                       if (snap.hasData && !_isGroup) {
-                        final isOnline = snap.data!.any((u) => u['user_id'] != meuUserId && (u['is_online'] ?? false));
-                        if (isOnline) text = 'Online';
+                        final user = snap.data!.firstWhere((u) => u['user_id'] == _targetUserId, orElse: () => {});
+                        if (user.isNotEmpty) {
+                           final isOnlineDB = user['is_online'] == true;
+                           final updatedAt = DateTime.tryParse(user['updated_at'].toString());
+                           if (isOnlineDB && updatedAt != null && DateTime.now().difference(updatedAt.toLocal()).inSeconds < 120) text = 'Online';
+                        }
                       }
                       if (_typingUsers.isNotEmpty && !_isGroup) {
                         text = 'digitando...';
@@ -463,14 +512,13 @@ class _ChatPageState extends State<ChatPage> {
         actions: [
           IconButton(icon: const Icon(Icons.videocam), onPressed: () => _logCallAndStart(true)),
           IconButton(icon: const Icon(Icons.call), onPressed: () => _logCallAndStart(false)),
-          // MENU COM OPÇÃO DE SAIR
           PopupMenuButton<String>(
             onSelected: (value) {
-              if (value == 'exit') Navigator.of(context).pop(); // <--- OPÇÃO SAIR
+              if (value == 'exit') Navigator.of(context).pop(); 
             },
             itemBuilder: (context) => [
               const PopupMenuItem(value: 'info', child: Text('Dados do grupo')),
-              const PopupMenuItem(value: 'exit', child: Text('Sair da conversa')), // <--- AQUI
+              const PopupMenuItem(value: 'exit', child: Text('Sair da conversa')),
             ]
           ),
         ],
@@ -544,7 +592,10 @@ class _ChatPageState extends State<ChatPage> {
                                         else if (type == 'audio') 
                                           Row(mainAxisSize: MainAxisSize.min, children: [IconButton(icon: Icon(_playingMessageId == m['id'] ? Icons.pause : Icons.play_arrow), onPressed: () => _playAudio(content, m['id'])), const Text("Áudio", style: TextStyle(color: Colors.white))])
                                         else if (type == 'file')
-                                          Row(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.file_present), Flexible(child: Text(m['file_name'] ?? 'Arquivo', style: const TextStyle(color: Colors.white)))])
+                                          GestureDetector(
+                                            onTap: () => _abrirArquivo(content),
+                                            child: Row(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.file_present), Flexible(child: Text(m['file_name'] ?? 'Arquivo', style: const TextStyle(color: Colors.white, decoration: TextDecoration.underline)))])
+                                          )
                                         else
                                           Padding(padding: const EdgeInsets.only(right: 10, bottom: 0), child: Text(content, style: const TextStyle(fontSize: 16, color: Colors.white))),
                                         
@@ -605,21 +656,18 @@ class _ChatPageState extends State<ChatPage> {
                       ),
                       const SizedBox(width: 5),
                       GestureDetector(
-                        // MUDANÇA PRINCIPAL: Agora funciona com CLIQUE (Toggle)
                         onTap: () { 
                           if (_messageController.text.isNotEmpty) {
                             _enviarMensagem();
                           } else {
-                            _toggleRecording(); // Clique simples grava/para
+                            _toggleRecording(); 
                           }
                         },
                         child: CircleAvatar(
                           radius: 24,
                           backgroundColor: accentColor,
                           child: Icon(
-                            _isRecording 
-                              ? Icons.stop  // Ícone de Stop quando gravando
-                              : (_messageController.text.isEmpty ? Icons.mic : Icons.send), // Mic ou Send
+                            _isRecording ? Icons.stop : (_messageController.text.isEmpty ? Icons.mic : Icons.send),
                             color: Colors.white
                           ),
                         ),

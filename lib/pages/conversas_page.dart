@@ -21,10 +21,12 @@ class _ConversasPageState extends State<ConversasPage> with RouteAware, SingleTi
   List<Map<String, dynamic>> _conversasAtivas = [];
   List<Map<String, dynamic>> _conversasArquivadas = [];
   List<Map<String, dynamic>> _statusList = [];
-  List<Map<String, dynamic>> _callLogs = [];
+  List<Map<String, dynamic>> _callLogs = []; 
   bool _isLoading = true;
   
+  // Variáveis para controlar os "Ouvintes" (Listeners)
   late final Stream<List<Map<String, dynamic>>> _presenceStream;
+  RealtimeChannel? _messagesListener; // <--- NOVO: Escuta mensagens
 
   @override
   void initState() {
@@ -35,6 +37,19 @@ class _ConversasPageState extends State<ConversasPage> with RouteAware, SingleTi
     _carregarConversas();
     _carregarStatus();
     _carregarChamadas();
+    
+    // --- AQUI ESTÁ A MÁGICA DO TEMPO REAL ---
+    // Escuta qualquer mudança na tabela de mensagens (Insert, Update, Delete)
+    _messagesListener = supabase.channel('public:messages').onPostgresChanges(
+      event: PostgresChangeEvent.all,
+      schema: 'public',
+      table: 'messages',
+      callback: (payload) {
+        // Se algo mudou, recarrega a lista!
+        _carregarConversas();
+      },
+    ).subscribe();
+    // ---------------------------------------
 
     _presenceStream = PresenceService.presenceStream();
     _presenceStream.listen((_) {
@@ -52,6 +67,8 @@ class _ConversasPageState extends State<ConversasPage> with RouteAware, SingleTi
   void dispose() {
     routeObserver.unsubscribe(this);
     _tabController.dispose();
+    // Limpa o ouvinte para não gastar memória
+    supabase.removeChannel(_messagesListener!); 
     super.dispose();
   }
 
@@ -134,7 +151,19 @@ class _ConversasPageState extends State<ConversasPage> with RouteAware, SingleTi
     final conversaId = c['conversation_id'];
     final name = c['display_name'] ?? "Conversa";
     final avatar = c['display_avatar'];
-    final lastMsg = c['last_message'] ?? "";
+    
+    // Formatação da última mensagem
+    String lastMsg = c['last_message'] ?? "";
+    if (lastMsg.startsWith('http')) {
+       if (lastMsg.contains('/chat_media/') && (lastMsg.endsWith('.jpg') || lastMsg.endsWith('.png'))) {
+         lastMsg = '📷 Foto';
+       } else if (lastMsg.contains('/audio_messages/')) {
+         lastMsg = '🎤 Áudio';
+       } else if (lastMsg.contains('/chat_media/')) {
+         lastMsg = '📄 Arquivo';
+       }
+    }
+
     final unreadCount = c['unread_count'] as int? ?? 0;
     final isArchived = c['is_archived'] == true;
     final lastTime = c['last_message_at'] != null ? DateTime.parse(c['last_message_at']).toLocal() : null;
@@ -162,7 +191,6 @@ class _ConversasPageState extends State<ConversasPage> with RouteAware, SingleTi
 
     return Scaffold(
       appBar: AppBar(
-        // 1. CORREÇÃO: REMOVE A SETA DE VOLTAR
         automaticallyImplyLeading: false, 
         title: const Text('ChatApp', style: TextStyle(fontWeight: FontWeight.bold)),
         elevation: 0,
@@ -248,35 +276,14 @@ class _ConversasPageState extends State<ConversasPage> with RouteAware, SingleTi
           ),
         ],
       ),
-      // 2. CORREÇÃO: BOTÃO FLUTUANTE (FAB)
       floatingActionButton: _buildFab(context),
     );
   }
 
   Widget _buildFab(BuildContext context) {
-    if (_tabController.index == 0) {
-      // Aba de Conversas: Botão de Nova Mensagem (Ícone de Mensagem)
-      return FloatingActionButton(
-        onPressed: () => Navigator.of(context).pushNamed('/search'), 
-        child: const Icon(Icons.message),
-      );
-    }
-    if (_tabController.index == 1) {
-      // Aba de Status: Botão de Câmera (Para postar status)
-      return FloatingActionButton(
-        heroTag: "cam", 
-        onPressed: _postarStatus, 
-        child: const Icon(Icons.camera_alt),
-      );
-    }
-    if (_tabController.index == 2) {
-      // Aba de Chamadas: Botão de Nova Chamada
-      return FloatingActionButton(
-        heroTag: "call", 
-        onPressed: (){}, // Ação a implementar depois
-        child: const Icon(Icons.add_call),
-      );
-    }
+    if (_tabController.index == 0) return FloatingActionButton(onPressed: () => Navigator.of(context).pushNamed('/search'), child: const Icon(Icons.message));
+    if (_tabController.index == 1) return FloatingActionButton(heroTag: "cam", onPressed: _postarStatus, child: const Icon(Icons.camera_alt));
+    if (_tabController.index == 2) return FloatingActionButton(heroTag: "call", onPressed: (){}, child: const Icon(Icons.add_call));
     return const SizedBox.shrink();
   }
 }
