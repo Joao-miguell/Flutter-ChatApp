@@ -24,6 +24,10 @@ dependencies:
 
   # 🔹 Ícones iOS (opcional)
   cupertino_icons: ^1.0.8
+  record: ^6.1.2
+  audioplayers: ^6.5.1
+  permission_handler: ^12.0.1
+  path_provider: ^2.1.5
 
 # Dependências apenas para Desenvolvimento e Testes
 dev_dependencies:
@@ -36,6 +40,5 @@ dev_dependencies:
 flutter:
   uses-material-design: true
 
-  # Se tiver imagens locais, descomente e adicione aqui:
-  # assets:
-  #   - assets/images/
+  assets:
+    - assets/images/

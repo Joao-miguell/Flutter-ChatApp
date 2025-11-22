@@ -80,16 +80,51 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    // Cores baseadas no WhatsApp
+    const waTeal = Color(0xFF008069);
+    const waDarkBackground = Color(0xFF121B22); 
+    const waChatBackground = Color(0xFF0B141A); 
+    const waBubbleGreen = Color(0xFF005C4B);    
+    const waBubbleGrey = Color(0xFF1F2C34);     
+    const waFabColor = Color(0xFF00A884);       
+
     return MaterialApp(
-      title: 'Flutter Chat App',
+      title: 'ChatApp',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
-        primaryColor: Colors.blue,
-        inputDecorationTheme: const InputDecorationTheme(
-          border: OutlineInputBorder(),
+        scaffoldBackgroundColor: waDarkBackground,
+        primaryColor: waTeal,
+        appBarTheme: const AppBarTheme(
+          backgroundColor: waChatBackground,
+          elevation: 0,
+          titleTextStyle: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+          iconTheme: IconThemeData(color: Colors.white),
+        ),
+        floatingActionButtonTheme: const FloatingActionButtonThemeData(
+          backgroundColor: waFabColor,
+          foregroundColor: Colors.white,
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: waBubbleGrey,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(24),
+            borderSide: BorderSide.none,
+          ),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+          hintStyle: const TextStyle(color: Colors.grey),
+        ),
+        colorScheme: const ColorScheme.dark(
+          primary: waTeal,
+          secondary: waFabColor,
+          surface: waChatBackground,
+          onSurface: Colors.white,
+        ).copyWith(
+          tertiary: waBubbleGreen, 
+          surfaceContainerHighest: waBubbleGrey,
         ),
       ),
-      navigatorObservers: [routeObserver], 
+      navigatorObservers: [routeObserver],
       initialRoute: '/',
       routes: {
         '/': (context) => const SplashPage(),
