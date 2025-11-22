@@ -80,39 +80,33 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    // --- PALETA ROXA DARK ---
-    const purplePrimary = Color(0xFF8A2BE2);      // Roxo principal (BlueViolet)
-    const purpleAccent = Color(0xFF9D46FF);       // Roxo mais claro para destaques
-    const darkBackground = Color(0xFF120D16);     // Fundo bem escuro, levemente roxo
-    const darkSurface = Color(0xFF1E1624);        // Fundo de barras e cards
-    const bubbleSent = Color(0xFF6A1B9A);         // Balão enviado (Roxo escuro)
-    const bubbleReceived = Color(0xFF2A2130);     // Balão recebido (Cinza arroxeado)
-
+    // --- NOVA PALETA DE CORES (ATUALIZADA) ---
+    const colorBackground = Color(0xFF131314); 
+    const colorPrimary = Color(0xFF301445);    // <--- NOVA COR AQUI
+    const colorSurface = Color(0xFF1E1E20);    
+    
     return MaterialApp(
       title: 'ChatApp',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: darkBackground,
-        primaryColor: purplePrimary,
+        scaffoldBackgroundColor: colorBackground,
+        primaryColor: colorPrimary,
         
-        // AppBar Roxa Escura
         appBarTheme: const AppBarTheme(
-          backgroundColor: darkSurface,
+          backgroundColor: colorBackground,
           elevation: 0,
           titleTextStyle: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
           iconTheme: IconThemeData(color: Colors.white),
         ),
         
-        // Botões Flutuantes Roxos
         floatingActionButtonTheme: const FloatingActionButtonThemeData(
-          backgroundColor: purpleAccent,
+          backgroundColor: colorPrimary,
           foregroundColor: Colors.white,
         ),
         
-        // Inputs
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
-          fillColor: bubbleReceived,
+          fillColor: colorSurface,
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(24),
             borderSide: BorderSide.none,
@@ -121,15 +115,14 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           hintStyle: const TextStyle(color: Colors.grey),
         ),
         
-        // Esquema de Cores Global
         colorScheme: const ColorScheme.dark(
-          primary: purplePrimary,
-          secondary: purpleAccent,
-          surface: darkSurface,
+          primary: colorPrimary,
+          secondary: colorPrimary, 
+          surface: colorBackground,
           onSurface: Colors.white,
         ).copyWith(
-          tertiary: bubbleSent, // Usado para mensagens enviadas
-          surfaceContainerHighest: bubbleReceived, // Usado para mensagens recebidas
+          tertiary: colorPrimary, 
+          surfaceContainerHighest: colorSurface, 
         ),
       ),
       navigatorObservers: [routeObserver],

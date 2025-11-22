@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data'; 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
+import 'package:supabase_flutter/supabase_flutter.dart'; 
 import 'package:chat_app/services/supabase_service.dart';
 import 'package:chat_app/services/presence_service.dart';
 import 'package:chat_app/services/typing_service.dart';
@@ -17,8 +19,9 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-// Pacote de Emoji
+// Pacote de Emoji e Chamada
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
+import 'package:chat_app/pages/call_page.dart';
 
 class ChatPage extends StatefulWidget {
   const ChatPage({super.key});
@@ -33,7 +36,7 @@ class _ChatPageState extends State<ChatPage> {
   final _messageController = TextEditingController();
   final _picker = ImagePicker();
   final ScrollController _scrollController = ScrollController();
-  final FocusNode _focusNode = FocusNode(); 
+  final FocusNode _focusNode = FocusNode();
   
   // Áudio
   late final AudioRecorder _audioRecorder;
@@ -41,7 +44,10 @@ class _ChatPageState extends State<ChatPage> {
   bool _isRecording = false;
   String? _playingMessageId;
   
-  // Controle de Emoji
+  // Variável para acumular bytes do áudio na Web
+  List<int> _webAudioBytes = [];
+  StreamSubscription? _recordStreamSubscription;
+
   bool _showEmojiPicker = false;
 
   String? meuUserId;
@@ -50,10 +56,9 @@ class _ChatPageState extends State<ChatPage> {
   StreamSubscription? _presenceSubscription;
   final Map<String, String> _typingUsers = {}; 
   bool _isGroup = false;
-  
-  // VARIÁVEIS DE CABEÇALHO (CORRIGIDAS)
   String _chatTitle = 'Carregando...';
-  String? _chatAvatar; // <--- AQUI VAI A FOTO DO USUÁRIO
+  String? _chatAvatar;
+  String? _targetUserId; 
 
   String? _editingMessageId; 
   bool get _isEditing => _editingMessageId != null;
@@ -109,6 +114,7 @@ class _ChatPageState extends State<ChatPage> {
     _messageController.dispose();
     _audioRecorder.dispose();
     _audioPlayer.dispose();
+    _recordStreamSubscription?.cancel();
     _scrollController.dispose();
     _focusNode.dispose();
     _presenceSubscription?.cancel();
@@ -116,46 +122,69 @@ class _ChatPageState extends State<ChatPage> {
     super.dispose();
   }
 
-  // --- UTILITÁRIOS ---
-  bool _isSameDay(DateTime? d1, DateTime? d2) {
-    if (d1 == null || d2 == null) return false;
-    return d1.year == d2.year && d1.month == d2.month && d1.day == d2.day;
-  }
-
-  String _formatDateHeader(DateTime date) {
-    final now = DateTime.now();
-    if (_isSameDay(now, date)) return "Hoje";
-    if (_isSameDay(now.subtract(const Duration(days: 1)), date)) return "Ontem";
-    return "${date.day.toString().padLeft(2,'0')}/${date.month.toString().padLeft(2,'0')}/${date.year}";
-  }
-
-  // --- ÁUDIO ---
-  Future<void> _startRecording() async {
-    if (kIsWeb) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Gravação de áudio não suportada na versão Web.")));
-      return;
+  // --- LÓGICA DE ÁUDIO CORRIGIDA (WEB + MOBILE) ---
+  
+  // Inicia gravação (Clique para começar)
+  Future<void> _toggleRecording() async {
+    if (_isRecording) {
+      await _stopRecordingAndSend();
+    } else {
+      await _startRecording();
     }
+  }
+
+  Future<void> _startRecording() async {
     try {
       if (await _audioRecorder.hasPermission()) {
-        final tempDir = await getTemporaryDirectory();
-        final path = '${tempDir.path}/audio_${DateTime.now().millisecondsSinceEpoch}.m4a';
-        await _audioRecorder.start(const RecordConfig(), path: path);
         setState(() => _isRecording = true);
+
+        if (kIsWeb) {
+          // Lógica Web: Gravar Stream de Bytes
+          _webAudioBytes = [];
+          final stream = await _audioRecorder.startStream(const RecordConfig(encoder: AudioEncoder.pcm16bit));
+          _recordStreamSubscription = stream.listen((data) {
+            _webAudioBytes.addAll(data);
+          });
+        } else {
+          // Lógica Mobile/Desktop: Gravar em Arquivo
+          final tempDir = await getTemporaryDirectory();
+          final path = '${tempDir.path}/audio_${DateTime.now().millisecondsSinceEpoch}.m4a';
+          await _audioRecorder.start(const RecordConfig(), path: path);
+        }
       }
     } catch (e) {
       debugPrint('Erro gravação: $e');
+      setState(() => _isRecording = false);
     }
   }
 
   Future<void> _stopRecordingAndSend() async {
-    if (kIsWeb) return;
     try {
-      final path = await _audioRecorder.stop();
+      String? path;
+      if (!kIsWeb) {
+        path = await _audioRecorder.stop();
+      } else {
+        await _audioRecorder.stop();
+        _recordStreamSubscription?.cancel();
+      }
+      
       setState(() => _isRecording = false);
-      if (path != null) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Envio de áudio disponível apenas em Mobile.")));
+
+      List<int>? bytes;
+      if (kIsWeb) {
+        if (_webAudioBytes.isNotEmpty) bytes = _webAudioBytes;
+      } else if (path != null) {
+        // Para mobile, precisamos ler o arquivo como bytes
+        // Como removemos dart:io, usamos XFile (que é cross-platform)
+        final file = XFile(path);
+        bytes = await file.readAsBytes();
+      }
+
+      if (bytes != null && bytes.isNotEmpty) {
+        await _uploadAndSendMedia('audio/m4a', 'audio.m4a', bytes, isMedia: false, type: 'audio');
       }
     } catch (e) {
+      debugPrint("Erro ao parar áudio: $e");
       setState(() => _isRecording = false);
     }
   }
@@ -172,6 +201,31 @@ class _ChatPageState extends State<ChatPage> {
         setState(() => _playingMessageId = msgId);
       }
     } catch (_) {}
+  }
+  // --- FIM LÓGICA ÁUDIO ---
+
+  // --- LÓGICA DE CHAMADA ---
+  Future<void> _logCallAndStart(bool isVideo) async {
+    if (meuUserId == null || _conversaId == null) return;
+    try {
+      await supabase.from('call_logs').insert({
+        'caller_id': meuUserId,
+        'receiver_id': _targetUserId,
+        'conversation_id': _conversaId,
+        'is_video': isVideo
+      });
+    } catch (e) { debugPrint('Erro call: $e'); }
+
+    if (mounted) {
+      Navigator.push(context, MaterialPageRoute(
+        builder: (_) => CallPage(
+          callID: _conversaId!,
+          userID: meuUserId!,
+          userName: 'Eu',
+          isVideo: isVideo,
+        )
+      ));
+    }
   }
 
   // --- EMOJI ---
@@ -191,22 +245,24 @@ class _ChatPageState extends State<ChatPage> {
     _onTextChanged(_messageController.text);
   }
 
-  // --- LÓGICA DE CARREGAMENTO (CORRIGIDA) ---
+  // --- CARREGAMENTOS ---
   Future<void> _loadChatDetails() async {
     if (_conversaId == null || meuUserId == null) return;
     try {
       final data = await supabase.from('conversations').select('is_group, name, avatar_url').eq('id', _conversaId!).single();
       final isGroup = data['is_group'] ?? false;
       String displayTitle = data['name'] ?? 'Chat';
-      String? displayAvatar = data['avatar_url']; // Pega avatar do grupo se houver
+      String? displayAvatar = data['avatar_url'];
+      String? targetId;
 
       if (!isGroup) {
         final other = await supabase.from('participants').select('user_id').eq('conversation_id', _conversaId!).neq('user_id', meuUserId!).maybeSingle();
         if (other != null) {
-          final p = await ProfileCache.getProfile(other['user_id']);
+          targetId = other['user_id'];
+          final p = await ProfileCache.getProfile(targetId!);
           if (p != null) {
             displayTitle = p['name'] ?? 'Usuário';
-            displayAvatar = p['avatar_url']; // Pega avatar do usuário
+            displayAvatar = p['avatar_url'];
           }
         }
       }
@@ -215,7 +271,8 @@ class _ChatPageState extends State<ChatPage> {
         setState(() { 
           _isGroup = isGroup; 
           _chatTitle = displayTitle;
-          _chatAvatar = displayAvatar; // Atualiza a variável de estado
+          _chatAvatar = displayAvatar;
+          _targetUserId = targetId;
         });
       }
     } catch (_) {}
@@ -237,6 +294,7 @@ class _ChatPageState extends State<ChatPage> {
     });
   }
 
+  // --- ENVIO ---
   Future<void> _enviarMensagem() async {
     final txt = _messageController.text.trim();
     if (txt.isEmpty || _conversaId == null) return;
@@ -259,20 +317,23 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _uploadAndSendMedia(String mime, String name, List<int> bytes, {bool isMedia = false, String type = 'file'}) async {
     try {
       final bucket = type == 'audio' ? 'audio_messages' : 'chat_media';
-      final res = await http.post(
-        Uri.parse('https://ebuybhhxytldczejyxey.supabase.co/functions/v1/get-signed-upload'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'filename': '${DateTime.now().millisecondsSinceEpoch}_$name', 'mime': mime, 'folder': bucket}),
+      final fileName = '${DateTime.now().millisecondsSinceEpoch}_$name';
+      
+      await supabase.storage.from(bucket).uploadBinary(
+        fileName,
+        Uint8List.fromList(bytes),
+        fileOptions: FileOptions(contentType: mime),
       );
-      if (res.statusCode != 200) throw 'Erro URL';
-      final d = jsonDecode(res.body);
-      await http.put(Uri.parse(d['uploadUrl']), headers: {'Content-Type': mime}, body: bytes);
-      final url = 'https://ebuybhhxytldczejyxey.supabase.co/storage/v1/object/public/$bucket/${d['key']}';
+
+      final url = supabase.storage.from(bucket).getPublicUrl(fileName);
       
       await supabase.from('messages').insert({
         'sender_id': meuUserId, 'conversation_id': _conversaId, 'content': url, 'type': type, 'is_media': isMedia, 'file_name': name
       });
-    } catch (e) { ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro upload: $e'))); }
+    } catch (e) { 
+      debugPrint('Erro upload: $e');
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao enviar: $e'))); 
+    }
   }
 
   Future<void> _enviarImagem() async {
@@ -290,6 +351,7 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
+  // --- INTERFACE ---
   void _onMessageLongPress(Map<String, dynamic> m) async {
     if (m['sender_id'] == meuUserId) {
         showModalBottomSheet(context: context, builder: (c) => Column(mainAxisSize: MainAxisSize.min, children: [
@@ -302,6 +364,18 @@ class _ChatPageState extends State<ChatPage> {
   void _onTextChanged(String val) {
     if (_conversaId != null) TypingService.notifyTyping(conversationId: _conversaId!, userId: meuUserId!);
     setState(() {});
+  }
+
+  bool _isSameDay(DateTime? d1, DateTime? d2) {
+    if (d1 == null || d2 == null) return false;
+    return d1.year == d2.year && d1.month == d2.month && d1.day == d2.day;
+  }
+
+  String _formatDateHeader(DateTime date) {
+    final now = DateTime.now();
+    if (_isSameDay(now, date)) return "Hoje";
+    if (_isSameDay(now.subtract(const Duration(days: 1)), date)) return "Ontem";
+    return "${date.day.toString().padLeft(2,'0')}/${date.month.toString().padLeft(2,'0')}/${date.year}";
   }
 
   Widget _buildReactionsRow(String messageId) {
@@ -349,12 +423,11 @@ class _ChatPageState extends State<ChatPage> {
 
     return Scaffold(
       appBar: AppBar(
+        automaticallyImplyLeading: false, // <--- REMOVE A SETA DE VOLTAR (PEDIDO ATENDIDO)
         titleSpacing: 0,
-        leadingWidth: 30,
-        leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.of(context).pop()),
         title: Row(
           children: [
-            // AQUI ESTÁ A CORREÇÃO DO AVATAR:
+            const SizedBox(width: 16), // Espaço extra já que tiramos a seta
             CircleAvatar(
               backgroundColor: Colors.grey,
               backgroundImage: _chatAvatar != null ? NetworkImage(_chatAvatar!) : null,
@@ -371,17 +444,14 @@ class _ChatPageState extends State<ChatPage> {
                     builder: (ctx, snap) {
                       String text = '';
                       Color textColor = Colors.white70; 
-                      
                       if (snap.hasData && !_isGroup) {
                         final isOnline = snap.data!.any((u) => u['user_id'] != meuUserId && (u['is_online'] ?? false));
                         if (isOnline) text = 'Online';
                       }
-                      
                       if (_typingUsers.isNotEmpty && !_isGroup) {
                         text = 'digitando...';
                         textColor = accentColor; 
                       }
-                      
                       return Text(text, style: TextStyle(fontSize: 12, fontWeight: FontWeight.normal, color: textColor, fontStyle: text == 'digitando...' ? FontStyle.italic : FontStyle.normal));
                     }
                   )
@@ -390,6 +460,20 @@ class _ChatPageState extends State<ChatPage> {
             ),
           ],
         ),
+        actions: [
+          IconButton(icon: const Icon(Icons.videocam), onPressed: () => _logCallAndStart(true)),
+          IconButton(icon: const Icon(Icons.call), onPressed: () => _logCallAndStart(false)),
+          // MENU COM OPÇÃO DE SAIR
+          PopupMenuButton<String>(
+            onSelected: (value) {
+              if (value == 'exit') Navigator.of(context).pop(); // <--- OPÇÃO SAIR
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(value: 'info', child: Text('Dados do grupo')),
+              const PopupMenuItem(value: 'exit', child: Text('Sair da conversa')), // <--- AQUI
+            ]
+          ),
+        ],
       ),
       body: Container(
         decoration: const BoxDecoration(image: DecorationImage(image: AssetImage('assets/images/background.jpg'), fit: BoxFit.cover)),
@@ -456,27 +540,15 @@ class _ChatPageState extends State<ChatPage> {
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
                                         if (type == 'image') 
-                                          GestureDetector(
-                                            onTap: () => _openFullScreenImage(content),
-                                            child: ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.network(content)),
-                                          )
+                                          GestureDetector(onTap: () => _openFullScreenImage(content), child: ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.network(content)))
                                         else if (type == 'audio') 
-                                          Row(mainAxisSize: MainAxisSize.min, children: [
-                                            IconButton(icon: Icon(_playingMessageId == m['id'] ? Icons.pause : Icons.play_arrow), onPressed: () => _playAudio(content, m['id'])),
-                                            const Text("Áudio", style: TextStyle(color: Colors.white))
-                                          ])
+                                          Row(mainAxisSize: MainAxisSize.min, children: [IconButton(icon: Icon(_playingMessageId == m['id'] ? Icons.pause : Icons.play_arrow), onPressed: () => _playAudio(content, m['id'])), const Text("Áudio", style: TextStyle(color: Colors.white))])
                                         else if (type == 'file')
                                           Row(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.file_present), Flexible(child: Text(m['file_name'] ?? 'Arquivo', style: const TextStyle(color: Colors.white)))])
                                         else
-                                          Padding(
-                                            padding: const EdgeInsets.only(right: 10, bottom: 0),
-                                            child: Text(content, style: const TextStyle(fontSize: 16, color: Colors.white)),
-                                          ),
+                                          Padding(padding: const EdgeInsets.only(right: 10, bottom: 0), child: Text(content, style: const TextStyle(fontSize: 16, color: Colors.white))),
                                         
-                                        Align(alignment: Alignment.bottomRight, widthFactor: 1, child: Row(mainAxisSize: MainAxisSize.min, children: [
-                                          Text(timeStr, style: const TextStyle(fontSize: 11, color: Colors.white54)),
-                                          if(isMine) ...[const SizedBox(width:4), Icon(Icons.done_all, size:15, color: accentColor)]
-                                        ])),
+                                        Align(alignment: Alignment.bottomRight, widthFactor: 1, child: Row(mainAxisSize: MainAxisSize.min, children: [Text(timeStr, style: const TextStyle(fontSize: 11, color: Colors.white54)), if(isMine) ...[const SizedBox(width:4), Icon(Icons.done_all, size:15, color: accentColor)]])),
                                         _buildReactionsRow(m['id']),
                                       ],
                                     ),
@@ -509,7 +581,7 @@ class _ChatPageState extends State<ChatPage> {
                             IconButton(icon: Icon(_showEmojiPicker ? Icons.keyboard : Icons.emoji_emotions_outlined, color: Colors.grey), onPressed: _toggleEmojiPicker),
                             Expanded(
                               child: _isRecording 
-                                ? const Padding(padding: EdgeInsets.only(left: 10), child: Text("Gravando... Solte para enviar", style: TextStyle(color: Colors.red)))
+                                ? const Padding(padding: EdgeInsets.only(left: 10), child: Text("Gravando... Toque para parar", style: TextStyle(color: Colors.red)))
                                 : TextField(
                                     controller: _messageController,
                                     focusNode: _focusNode,
@@ -533,19 +605,28 @@ class _ChatPageState extends State<ChatPage> {
                       ),
                       const SizedBox(width: 5),
                       GestureDetector(
-                        onLongPress: _startRecording,
-                        onLongPressUp: _stopRecordingAndSend,
-                        onTap: () { if(_messageController.text.isNotEmpty) _enviarMensagem(); },
+                        // MUDANÇA PRINCIPAL: Agora funciona com CLIQUE (Toggle)
+                        onTap: () { 
+                          if (_messageController.text.isNotEmpty) {
+                            _enviarMensagem();
+                          } else {
+                            _toggleRecording(); // Clique simples grava/para
+                          }
+                        },
                         child: CircleAvatar(
                           radius: 24,
                           backgroundColor: accentColor,
-                          child: Icon(_isRecording ? Icons.stop : (_messageController.text.isEmpty ? Icons.mic : Icons.send), color: Colors.white),
+                          child: Icon(
+                            _isRecording 
+                              ? Icons.stop  // Ícone de Stop quando gravando
+                              : (_messageController.text.isEmpty ? Icons.mic : Icons.send), // Mic ou Send
+                            color: Colors.white
+                          ),
                         ),
                       )
                     ]),
                   ),
                   
-                  // SELETOR DE EMOJI
                   if (_showEmojiPicker)
                     SizedBox(
                       height: 250,

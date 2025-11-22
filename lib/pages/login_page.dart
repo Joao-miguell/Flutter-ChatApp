@@ -14,10 +14,10 @@ class _LoginPageState extends State<LoginPage> {
   final _passwordController = TextEditingController();
   bool _isLoading = false;
 
-  // Cores Roxas
-  final Color purpleBg = const Color(0xFF120D16);
-  final Color purpleInput = const Color(0xFF1E1624);
-  final Color purpleAccent = const Color(0xFF9D46FF);
+  // Novas Cores (Atualizadas)
+  final Color customBg = const Color(0xFF131314);
+  final Color customInput = const Color(0xFF1E1E20);
+  final Color customPurple = const Color(0xFF301445); // <--- NOVA COR AQUI
 
   Future<void> _signIn() async {
     setState(() { _isLoading = true; });
@@ -53,28 +53,26 @@ class _LoginPageState extends State<LoginPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: purpleBg,
+      backgroundColor: customBg,
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.symmetric(horizontal: 40),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // Logo Roxa (Ícone Telefone)
               Container(
                 width: 120,
                 height: 120,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: purpleAccent.withOpacity(0.1),
-                  border: Border.all(color: purpleAccent, width: 2),
+                  color: customPurple.withOpacity(0.2), 
+                  border: Border.all(color: customPurple, width: 2),
                 ),
-                child: Icon(Icons.phone_in_talk, size: 60, color: purpleAccent),
+                child: const Icon(Icons.phone_in_talk, size: 60, color: Colors.white),
               ),
               
               const SizedBox(height: 40),
 
-              // NOME CORRIGIDO AQUI:
               const Text(
                 'Bem-vindo ao ChatApp',
                 textAlign: TextAlign.center,
@@ -114,7 +112,7 @@ class _LoginPageState extends State<LoginPage> {
                 child: ElevatedButton(
                   onPressed: _isLoading ? null : _signIn,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: purpleAccent,
+                    backgroundColor: customPurple,
                     foregroundColor: Colors.white,
                     elevation: 0,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
@@ -134,7 +132,7 @@ class _LoginPageState extends State<LoginPage> {
                     text: 'Não tem conta? ',
                     style: const TextStyle(color: Colors.grey),
                     children: [
-                      TextSpan(text: 'Cadastre-se', style: TextStyle(color: purpleAccent, fontWeight: FontWeight.bold)),
+                      TextSpan(text: 'Cadastre-se', style: TextStyle(color: customPurple, fontWeight: FontWeight.bold)),
                     ],
                   ),
                 ),
@@ -149,7 +147,7 @@ class _LoginPageState extends State<LoginPage> {
   Widget _buildTextField({required TextEditingController controller, required String label, required IconData icon, bool isObscure = false}) {
     return Container(
       decoration: BoxDecoration(
-        color: purpleInput,
+        color: customInput,
         borderRadius: BorderRadius.circular(12),
       ),
       child: TextField(
@@ -159,7 +157,7 @@ class _LoginPageState extends State<LoginPage> {
         decoration: InputDecoration(
           labelText: label,
           labelStyle: const TextStyle(color: Colors.grey),
-          prefixIcon: Icon(icon, color: purpleAccent),
+          prefixIcon: Icon(icon, color: Colors.white54),
           border: InputBorder.none,
           contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
         ),
