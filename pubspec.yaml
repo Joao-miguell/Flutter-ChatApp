@@ -30,6 +30,7 @@ dependencies:
   path_provider: ^2.1.5
   uuid: ^4.5.2
   zego_uikit_prebuilt_call: ^4.21.1
+  emoji_picker_flutter: ^4.3.0
 
 # Dependências apenas para Desenvolvimento e Testes
 dev_dependencies:

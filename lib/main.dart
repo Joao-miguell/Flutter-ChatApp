@@ -80,33 +80,39 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    // Cores baseadas no WhatsApp
-    const waTeal = Color(0xFF008069);
-    const waDarkBackground = Color(0xFF121B22); 
-    const waChatBackground = Color(0xFF0B141A); 
-    const waBubbleGreen = Color(0xFF005C4B);    
-    const waBubbleGrey = Color(0xFF1F2C34);     
-    const waFabColor = Color(0xFF00A884);       
+    // --- PALETA ROXA DARK ---
+    const purplePrimary = Color(0xFF8A2BE2);      // Roxo principal (BlueViolet)
+    const purpleAccent = Color(0xFF9D46FF);       // Roxo mais claro para destaques
+    const darkBackground = Color(0xFF120D16);     // Fundo bem escuro, levemente roxo
+    const darkSurface = Color(0xFF1E1624);        // Fundo de barras e cards
+    const bubbleSent = Color(0xFF6A1B9A);         // Balão enviado (Roxo escuro)
+    const bubbleReceived = Color(0xFF2A2130);     // Balão recebido (Cinza arroxeado)
 
     return MaterialApp(
       title: 'ChatApp',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: waDarkBackground,
-        primaryColor: waTeal,
+        scaffoldBackgroundColor: darkBackground,
+        primaryColor: purplePrimary,
+        
+        // AppBar Roxa Escura
         appBarTheme: const AppBarTheme(
-          backgroundColor: waChatBackground,
+          backgroundColor: darkSurface,
           elevation: 0,
           titleTextStyle: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
           iconTheme: IconThemeData(color: Colors.white),
         ),
+        
+        // Botões Flutuantes Roxos
         floatingActionButtonTheme: const FloatingActionButtonThemeData(
-          backgroundColor: waFabColor,
+          backgroundColor: purpleAccent,
           foregroundColor: Colors.white,
         ),
+        
+        // Inputs
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
-          fillColor: waBubbleGrey,
+          fillColor: bubbleReceived,
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(24),
             borderSide: BorderSide.none,
@@ -114,14 +120,16 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
           hintStyle: const TextStyle(color: Colors.grey),
         ),
+        
+        // Esquema de Cores Global
         colorScheme: const ColorScheme.dark(
-          primary: waTeal,
-          secondary: waFabColor,
-          surface: waChatBackground,
+          primary: purplePrimary,
+          secondary: purpleAccent,
+          surface: darkSurface,
           onSurface: Colors.white,
         ).copyWith(
-          tertiary: waBubbleGreen, 
-          surfaceContainerHighest: waBubbleGrey,
+          tertiary: bubbleSent, // Usado para mensagens enviadas
+          surfaceContainerHighest: bubbleReceived, // Usado para mensagens recebidas
         ),
       ),
       navigatorObservers: [routeObserver],
